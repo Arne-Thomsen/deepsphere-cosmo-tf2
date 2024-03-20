@@ -8,8 +8,6 @@ from typing import Union, Optional
 from tqdm import tqdm
 from . import utils
 
-np.set_printoptions(precision=1)
-
 
 class HealpyPool(Model):
     """
@@ -629,33 +627,34 @@ class HealpySmoothing(Model):
             # derived attributes
             self.n_indices = len(indices)
             self.kernel_func = lambda r: np.exp(-0.5 / self.sigma_rad**2 * r**2)
-            self.file_label = f"-nside{self.nside}-sigma{self.sigma_arcmin:4.2f}-n_sigma{n_sigma_support}"
+            with np.printoptions(precision=2):
+                self.file_label = f"-nside{self.nside}-sigma{self.sigma_arcmin:4.2f}-n_sigma{n_sigma_support}"
 
-            if self.per_channel_repetitions is not None:
-                per_channel_factor = np.sqrt(self.per_channel_repetitions)
-                print(f"Using the per channel smoothing repetitions {self.per_channel_repetitions}")
-                print(
-                    f"Using the per channel smoothing scales "
-                    f"sigma = {per_channel_factor * self.sigma_arcmin} arcmin, "
-                    f"fwhm = {per_channel_factor * self.fwhm_arcmin} arcmin"
-                )
-            else:
-                print(
-                    f"Using the per channel smoothing scale sigma = {self.sigma_arcmin:4.2f} arcmin, "
-                    f" fwhm = {self.fwhm_arcmin:4.2f} arcmin"
-                )
+                if self.per_channel_repetitions is not None:
+                    per_channel_factor = np.sqrt(self.per_channel_repetitions)
+                    print(f"Using the per channel smoothing repetitions {self.per_channel_repetitions}")
+                    print(
+                        f"Using the per channel smoothing scales "
+                        f"sigma = {per_channel_factor * self.sigma_arcmin} arcmin, "
+                        f"fwhm = {per_channel_factor * self.fwhm_arcmin} arcmin"
+                    )
+                else:
+                    print(
+                        f"Using the per channel smoothing scale sigma = {self.sigma_arcmin:4.2f} arcmin, "
+                        f" fwhm = {self.fwhm_arcmin:4.2f} arcmin"
+                    )
 
-            if self.data_path is not None:
-                try:
-                    self.ind_coo = np.load(os.path.join(self.data_path, f"ind_coo{self.file_label}.npy"))
-                    self.val_coo = np.load(os.path.join(self.data_path, f"val_coo{self.file_label}.npy"))
-                    print(f"Successfully loaded sparse kernel indices and values from {self.data_path}")
-                except FileNotFoundError:
+                if self.data_path is not None:
+                    try:
+                        self.ind_coo = np.load(os.path.join(self.data_path, f"ind_coo{self.file_label}.npy"))
+                        self.val_coo = np.load(os.path.join(self.data_path, f"val_coo{self.file_label}.npy"))
+                        print(f"Successfully loaded sparse kernel indices and values from {self.data_path}")
+                    except FileNotFoundError:
+                        self._build_tree()
+                        self._build_kernel()
+                else:
                     self._build_tree()
                     self._build_kernel()
-            else:
-                self._build_tree()
-                self._build_kernel()
 
             self._build_sparse_tensor()
             print(f"Successfully created the sparse kernel tensor")
