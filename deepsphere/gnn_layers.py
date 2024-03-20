@@ -7,13 +7,24 @@ from tensorflow.keras import Model
 from . import utils
 from scipy.special import comb
 
+
 class Chebyshev(Model):
     """
     A graph convolutional layer using the Chebyshev approximation
     """
 
-    def __init__(self, L, K, Fout=None, initializer=None, activation=None, use_bias=False,
-                 use_bn=False, n_matmul_splits=1, **kwargs):
+    def __init__(
+        self,
+        L,
+        K,
+        Fout=None,
+        initializer=None,
+        activation=None,
+        use_bias=False,
+        use_bn=False,
+        n_matmul_splits=1,
+        **kwargs,
+    ):
         """
         Initializes the graph convolutional layer, assuming the input has dimension (B, M, F)
         :param L: The graph Laplacian (MxM), as numpy array
@@ -23,7 +34,7 @@ class Chebyshev(Model):
         :param activation: the activation function to use after the layer, defaults to linear
         :param use_bias: Use learnable bias weights
         :param use_bn: Apply batch norm before adding the bias
-        :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the 
+        :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the
             tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
         :param kwargs: additional keyword arguments passed on to add_weight
         """
@@ -38,7 +49,9 @@ class Chebyshev(Model):
         self.use_bias = use_bias
         self.use_bn = use_bn
         if self.use_bn:
-            self.bn = tf.keras.layers.BatchNormalization(axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False)
+            self.bn = tf.keras.layers.BatchNormalization(
+                axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False
+            )
         self.initializer = initializer
         if activation is None or callable(activation):
             self.activation = activation
@@ -51,7 +64,7 @@ class Chebyshev(Model):
 
         # Rescale Laplacian and store as a TF sparse tensor. Copy to not modify the shared L.
         L = sparse.csr_matrix(L)
-        lmax = 1.02 * eigsh(L, k=1, which='LM', return_eigenvectors=False)[0]
+        lmax = 1.02 * eigsh(L, k=1, which="LM", return_eigenvectors=False)[0]
         L = utils.rescale_L(L, lmax=lmax, scale=0.75)
         L = L.tocoo()
         indices = np.column_stack((L.row, L.col))
@@ -78,19 +91,19 @@ class Chebyshev(Model):
             # Filter: Fin*Fout filters of order K, i.e. one filterbank per output feature.
             stddev = 1 / np.sqrt(Fin * (self.K + 0.5) / 2)
             initializer = tf.initializers.TruncatedNormal(stddev=stddev)
-            self.kernel = self.add_weight("kernel", shape=[self.K * Fin, Fout],
-                                          initializer=initializer, **self.kwargs)
+            self.kernel = self.add_weight("kernel", shape=[self.K * Fin, Fout], initializer=initializer, **self.kwargs)
         else:
-            self.kernel = self.add_weight("kernel", shape=[self.K * Fin, Fout],
-                                          initializer=self.initializer, **self.kwargs)
+            self.kernel = self.add_weight(
+                "kernel", shape=[self.K * Fin, Fout], initializer=self.initializer, **self.kwargs
+            )
 
         if self.use_bias:
             self.bias = self.add_weight("bias", shape=[1, 1, Fout])
 
         # we cast the sparse L to the current backend type
-        if tf.keras.backend.floatx() == 'float32':
+        if tf.keras.backend.floatx() == "float32":
             self.sparse_L = tf.cast(self.sparse_L, tf.float32)
-        if tf.keras.backend.floatx() == 'float64':
+        if tf.keras.backend.floatx() == "float64":
             self.sparse_L = tf.cast(self.sparse_L, tf.float64)
 
     def call(self, input_tensor, training=False):
@@ -152,8 +165,19 @@ class Monomial(Model):
     """
     A graph convolutional layer using Monomials
     """
-    def __init__(self, L, K, Fout=None, initializer=None, activation=None, use_bias=False,
-                 use_bn=False, n_matmul_splits=1, **kwargs):
+
+    def __init__(
+        self,
+        L,
+        K,
+        Fout=None,
+        initializer=None,
+        activation=None,
+        use_bias=False,
+        use_bn=False,
+        n_matmul_splits=1,
+        **kwargs,
+    ):
         """
         Initializes the graph convolutional layer, assuming the input has dimension (B, M, F)
         :param L: The graph Laplacian (MxM), as numpy array
@@ -163,7 +187,7 @@ class Monomial(Model):
         :param activation: the activation function to use after the layer, defaults to linear
         :param use_bias: Use learnable bias weights
         :param use_bn: Apply batch norm before adding the bias
-        :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the 
+        :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the
             tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
         :param kwargs: additional keyword arguments passed on to add_weight
         """
@@ -178,7 +202,9 @@ class Monomial(Model):
         self.use_bias = use_bias
         self.use_bn = use_bn
         if self.use_bn:
-            self.bn = tf.keras.layers.BatchNormalization(axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False)
+            self.bn = tf.keras.layers.BatchNormalization(
+                axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False
+            )
         self.initializer = initializer
         if activation is None or callable(activation):
             self.activation = activation
@@ -191,7 +217,7 @@ class Monomial(Model):
 
         # Rescale Laplacian and store as a TF sparse tensor. Copy to not modify the shared L.
         L = sparse.csr_matrix(L)
-        lmax = 1.02 * eigsh(L, k=1, which='LM', return_eigenvectors=False)[0]
+        lmax = 1.02 * eigsh(L, k=1, which="LM", return_eigenvectors=False)[0]
         L = utils.rescale_L(L, lmax=lmax)
         L = L.tocoo()
         indices = np.column_stack((L.row, L.col))
@@ -216,19 +242,19 @@ class Monomial(Model):
         if self.initializer is None:
             # Filter: Fin*Fout filters of order K, i.e. one filterbank per output feature.
             initializer = tf.initializers.TruncatedNormal(stddev=0.1)
-            self.kernel = self.add_weight("kernel", shape=[self.K * Fin, Fout],
-                                          initializer=initializer, **self.kwargs)
+            self.kernel = self.add_weight("kernel", shape=[self.K * Fin, Fout], initializer=initializer, **self.kwargs)
         else:
-            self.kernel = self.add_weight("kernel", shape=[self.K * Fin, Fout],
-                                          initializer=self.initializer, **self.kwargs)
+            self.kernel = self.add_weight(
+                "kernel", shape=[self.K * Fin, Fout], initializer=self.initializer, **self.kwargs
+            )
 
         if self.use_bias:
             self.bias = self.add_weight("bias", shape=[1, 1, Fout])
 
         # we cast the sparse L to the current backend type
-        if tf.keras.backend.floatx() == 'float32':
+        if tf.keras.backend.floatx() == "float32":
             self.sparse_L = tf.cast(self.sparse_L, tf.float32)
-        if tf.keras.backend.floatx() == 'float64':
+        if tf.keras.backend.floatx() == "float64":
             self.sparse_L = tf.cast(self.sparse_L, tf.float64)
 
     def call(self, input_tensor, training=False):
@@ -291,8 +317,17 @@ class GCNN_ResidualLayer(Model):
     with optional batchnorm in the end
     """
 
-    def __init__(self, layer_type, layer_kwargs, activation=None, act_before=False, use_bn=False,
-                 norm_type="batch_norm", bn_kwargs=None, alpha=1.0):
+    def __init__(
+        self,
+        layer_type,
+        layer_kwargs,
+        activation=None,
+        act_before=False,
+        use_bn=False,
+        norm_type="batch_norm",
+        bn_kwargs=None,
+        alpha=1.0,
+    ):
         """
         Initializes the residual layer with the given argument
         :param layer_type: The layer type, either "CHEBY" or "MONO" for chebychev or monomials
@@ -322,7 +357,7 @@ class GCNN_ResidualLayer(Model):
         self.norm_type = norm_type
         # set the default axis if necessary
         if bn_kwargs is None:
-                self.bn_kwargs = {"axis": -1}
+            self.bn_kwargs = {"axis": -1}
         else:
             self.bn_kwargs = bn_kwargs
             if "axis" not in self.bn_kwargs and norm_type != "moving_norm":
@@ -374,17 +409,29 @@ class GCNN_ResidualLayer(Model):
             return x + input_tensor
 
         if self.act_before:
-            return self.activation(x) + self.alpha*input_tensor
+            return self.activation(x) + self.alpha * input_tensor
         else:
-            return self.activation(x + self.alpha*input_tensor)
+            return self.activation(x + self.alpha * input_tensor)
+
+
 class Bernstein(Model):
     """
     A graph convolutional layer using the Bernstein approximation
     see https://arxiv.org/abs/2106.10994
     """
 
-    def __init__(self, L, K, Fout=None, initializer=None, activation=None, use_bias=False,
-                 use_bn=False, n_matmul_splits=1, **kwargs):
+    def __init__(
+        self,
+        L,
+        K,
+        Fout=None,
+        initializer=None,
+        activation=None,
+        use_bias=False,
+        use_bn=False,
+        n_matmul_splits=1,
+        **kwargs,
+    ):
         """
         Initializes the graph convolutional layer, assuming the input has dimension (B, M, F)
         :param L: The graph Laplacian (MxM), as numpy array
@@ -394,7 +441,7 @@ class Bernstein(Model):
         :param activation: the activation function to use after the layer, defaults to linear
         :param use_bias: Use learnable bias weights
         :param use_bn: Apply batch norm before adding the bias
-        :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the 
+        :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the
             tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
         :param kwargs: additional keyword arguments passed on to add_weight
         """
@@ -409,7 +456,9 @@ class Bernstein(Model):
         self.use_bias = use_bias
         self.use_bn = use_bn
         if self.use_bn:
-            self.bn = tf.keras.layers.BatchNormalization(axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False)
+            self.bn = tf.keras.layers.BatchNormalization(
+                axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False
+            )
         self.initializer = initializer
         if activation is None or callable(activation):
             self.activation = activation
@@ -422,7 +471,7 @@ class Bernstein(Model):
 
         # Rescale Laplacian and store as a TF sparse tensor. Copy to not modify the shared L.
         L = sparse.csr_matrix(L)
-        lmax = 1.02 * eigsh(L, k=1, which='LM', return_eigenvectors=False)[0]
+        lmax = 1.02 * eigsh(L, k=1, which="LM", return_eigenvectors=False)[0]
         L = utils.rescale_L(L, lmax=lmax, scale=0.75)
         L = L.tocoo()
         indices = np.column_stack((L.row, L.col))
@@ -447,21 +496,23 @@ class Bernstein(Model):
 
         if self.initializer is None:
             # Filter: Fin*Fout filters of order K, i.e. one filterbank per output feature.
-            stddev = np.sqrt(6 /(Fin+Fout))
+            stddev = np.sqrt(6 / (Fin + Fout))
             initializer = tf.initializers.TruncatedNormal(stddev=stddev)
-            self.kernel = self.add_weight("kernel", shape=[(self.K+1) * Fin, Fout],
-                                          initializer=initializer, **self.kwargs)
+            self.kernel = self.add_weight(
+                "kernel", shape=[(self.K + 1) * Fin, Fout], initializer=initializer, **self.kwargs
+            )
         else:
-            self.kernel = self.add_weight("kernel", shape=[(self.K+1) * Fin, Fout],
-                                          initializer=self.initializer, **self.kwargs)
+            self.kernel = self.add_weight(
+                "kernel", shape=[(self.K + 1) * Fin, Fout], initializer=self.initializer, **self.kwargs
+            )
 
         if self.use_bias:
             self.bias = self.add_weight("bias", shape=[1, 1, Fout])
 
         # we cast the sparse L to the current backend type
-        if tf.keras.backend.floatx() == 'float32':
+        if tf.keras.backend.floatx() == "float32":
             self.sparse_L = tf.cast(self.sparse_L, tf.float32)
-        if tf.keras.backend.floatx() == 'float64':
+        if tf.keras.backend.floatx() == "float64":
             self.sparse_L = tf.cast(self.sparse_L, tf.float64)
 
     def call(self, input_tensor, training=False, *args, **kwargs):
@@ -490,25 +541,25 @@ class Bernstein(Model):
         # Transform to Chebyshev basis
         x0 = tf.transpose(input_tensor, perm=[1, 2, 0])  # M x Fin x N
         x0 = tf.reshape(x0, [M, -1])  # M x Fin*N
-        
+
         # list for stacking
         stack = []
-        for i in range(0,self.K+1):
+        for i in range(0, self.K + 1):
             x1 = x0
-            theta = comb(self.K,i)/(2**self.K)
+            theta = comb(self.K, i) / (2**self.K)
             for j in range(i):
-                x2= utils.split_sparse_dense_matmul(self.sparse_L, x1, self.n_matmul_splits)
-                x1 =x2
-            x2=x1
-            for k in range(self.K-i):
+                x2 = utils.split_sparse_dense_matmul(self.sparse_L, x1, self.n_matmul_splits)
+                x1 = x2
+            x2 = x1
+            for k in range(self.K - i):
                 x3 = 2 * x2 - utils.split_sparse_dense_matmul(self.sparse_L, x2, self.n_matmul_splits)
-                x2 =x3
-            x3 = theta*x3
+                x2 = x3
+            x3 = theta * x3
             stack.append(x3)
         x = tf.stack(stack, axis=0)
-        x = tf.reshape(x, [(self.K+1), M, Fin, -1])  # K+1 x M x Fin x N
+        x = tf.reshape(x, [(self.K + 1), M, Fin, -1])  # K+1 x M x Fin x N
         x = tf.transpose(x, perm=[3, 1, 2, 0])  # N x M x Fin x K+1
-        x = tf.reshape(x, [-1, Fin * (self.K+1)])  # N*M x Fin*K+1
+        x = tf.reshape(x, [-1, Fin * (self.K + 1)])  # N*M x Fin*K+1
         # Filter: Fin*Fout filters of order K, i.e. one filterbank per output feature.
         x = tf.matmul(x, self.kernel)  # N*M x Fout
         x = tf.reshape(x, [-1, M, Fout])  # N x M x Fout

@@ -25,21 +25,22 @@ class HealpyGCNN(Sequential):
         :param layers: a list of layers that will make up the neural network
         :param n_neighbors: Number of neighbors considered when building the graph, currently supported values are:
                             8 (default), 20, 40 and 60.
-        :param max_batch_size: Maximal batch size this network is supposed to handle. This determines the number of 
+        :param max_batch_size: Maximal batch size this network is supposed to handle. This determines the number of
                                 splits in the tf.sparse.sparse_dense_matmul operation, which are subsequently applied
-                                independent of the actual batch size. Defaults to None, then no such precautions are 
+                                independent of the actual batch size. Defaults to None, then no such precautions are
                                 taken, which may cause an error.
         :param initial_Fin: Initial number of input features. Defaults to None, then like for max_batch_size, there
-                            are no precautions in the tf.sparse.sparse_dense_matmul operation taken. 
+                            are no precautions in the tf.sparse.sparse_dense_matmul operation taken.
         """
         # This is necessary for every Layer
-        super(HealpyGCNN, self).__init__(name='')
+        super(HealpyGCNN, self).__init__(name="")
 
         print("WARNING: This network assumes that everything concerning healpy is in NEST ordering...", flush=True)
 
         if n_neighbors not in [8, 20, 40, 60]:
-            raise NotImplementedError(f"The requested number of neighbors {n_neighbors} is nor supported. Choose "
-                                      f"either 8, 20, 40 or 60.")
+            raise NotImplementedError(
+                f"The requested number of neighbors {n_neighbors} is nor supported. Choose " f"either 8, 20, 40 or 60."
+            )
 
         # save the variables
         self.nside_in = nside
@@ -55,16 +56,20 @@ class HealpyGCNN(Sequential):
             if isinstance(layer, hp_nn.HealpyPseudoConv_Transpose):
                 self.reduction_fac /= 2 ** (layer.p)
 
-        self.nside_out = int(self.nside_in//self.reduction_fac)
+        self.nside_out = int(self.nside_in // self.reduction_fac)
         if self.nside_out < 1:
-            raise ValueError("With the given input, the layers would reduce the nside below zero!"
-                             "Use less layers that reduce the nside, e.g. HealpyPool or HealpyPseudoConv...")
+            raise ValueError(
+                "With the given input, the layers would reduce the nside below zero!"
+                "Use less layers that reduce the nside, e.g. HealpyPool or HealpyPseudoConv..."
+            )
         if not hp.isnsideok(self.nside_out, nest=True):
             raise ValueError(f"The ouput of the network does not have a valid nside {self.nside_out}...")
 
-        print(f"Detected a reduction factor of {self.reduction_fac}, the input with nside {self.nside_in} will be "
-              f"transformed to {self.nside_out} during a forward pass. Checking for consistency with indices...",
-              flush=True)
+        print(
+            f"Detected a reduction factor of {self.reduction_fac}, the input with nside {self.nside_in} will be "
+            f"transformed to {self.nside_out} during a forward pass. Checking for consistency with indices...",
+            flush=True,
+        )
 
         # now we check if this makes sense with the given indices set
         mask_in = np.zeros(hp.nside2npix(self.nside_in))
@@ -75,10 +80,12 @@ class HealpyGCNN(Sequential):
         transformed_indices = np.arange(hp.nside2npix(self.nside_in))[mask_in > 1e-12]
 
         if not np.all(np.sort(transformed_indices.astype(int)) == np.sort(self.indices_in.astype(int))):
-            raise ValueError("With the given indices it would not be possible to properly reduce the input maps "
-                             "with the reduction factor determined by the layers. Use the function "
-                             "<extend_indices> from utils with the determined minimal nside to make your set of "
-                             "indices compatible...")
+            raise ValueError(
+                "With the given indices it would not be possible to properly reduce the input maps "
+                "with the reduction factor determined by the layers. Use the function "
+                "<extend_indices> from utils with the determined minimal nside to make your set of "
+                "indices compatible..."
+            )
         else:
             print("indices seem consistent...", flush=True)
 
@@ -91,22 +98,38 @@ class HealpyGCNN(Sequential):
         current_Fin = initial_Fin
 
         for layer in self.layers_in:
-            if isinstance(layer, (hp_nn.HealpyChebyshev, hp_nn.HealpyMonomial, hp_nn.Healpy_ResidualLayer,
-                                  hp_nn.Healpy_Transformer,hp_nn.HealpyBernstein)):
+            if isinstance(
+                layer,
+                (
+                    hp_nn.HealpyChebyshev,
+                    hp_nn.HealpyMonomial,
+                    hp_nn.Healpy_ResidualLayer,
+                    hp_nn.Healpy_Transformer,
+                    hp_nn.HealpyBernstein,
+                ),
+            ):
                 # we need to calculate the current L and get the actual layer
-                sphere = SphereHealpix(subdivisions=current_nside, indexes=current_indices, nest=True,
-                                       k=self.n_neighbors, lap_type='normalized')
+                sphere = SphereHealpix(
+                    subdivisions=current_nside,
+                    indexes=current_indices,
+                    nest=True,
+                    k=self.n_neighbors,
+                    lap_type="normalized",
+                )
                 current_L = sphere.L
                 current_A = sphere.A
                 if isinstance(layer, hp_nn.Healpy_Transformer):
                     actual_layer = layer._get_layer(current_A)
-                elif isinstance(layer, (hp_nn.HealpyChebyshev, hp_nn.HealpyMonomial, hp_nn.HealpyBernstein,
-                                hp_nn.Healpy_ResidualLayer)):
+                elif isinstance(
+                    layer,
+                    (hp_nn.HealpyChebyshev, hp_nn.HealpyMonomial, hp_nn.HealpyBernstein, hp_nn.Healpy_ResidualLayer),
+                ):
                     if (max_batch_size is not None) and (current_Fin is not None):
                         n_matmul_splits = 1
                         while not (
                             # tf.split only does even splits for integer arguments
-                            (max_batch_size * current_Fin % n_matmul_splits == 0) and 
+                            (max_batch_size * current_Fin % n_matmul_splits == 0)
+                            and
                             # due to tf.sparse.sparse_dense_matmul
                             (n_matmul_splits >= max_batch_size * current_Fin * len(current_L.indices) / 2**31)
                         ):
@@ -120,16 +143,18 @@ class HealpyGCNN(Sequential):
                 self.layers_use.append(actual_layer)
             elif isinstance(layer, (hp_nn.HealpyPool, hp_nn.HealpyPseudoConv, hp_nn.Healpy_ViT)):
                 # a reduction is happening
-                new_nside = int(current_nside//2**layer.p)
-                current_indices = self._transform_indices(nside_in=current_nside, nside_out=new_nside,
-                                                          indices=current_indices)
+                new_nside = int(current_nside // 2**layer.p)
+                current_indices = self._transform_indices(
+                    nside_in=current_nside, nside_out=new_nside, indices=current_indices
+                )
                 current_nside = new_nside
                 self.layers_use.append(layer)
             elif isinstance(layer, hp_nn.HealpyPseudoConv_Transpose):
                 # a reduction is happening
-                new_nside = int(current_nside * 2 ** layer.p)
-                current_indices = self._transform_indices(nside_in=current_nside, nside_out=new_nside,
-                                                          indices=current_indices)
+                new_nside = int(current_nside * 2**layer.p)
+                current_indices = self._transform_indices(
+                    nside_in=current_nside, nside_out=new_nside, indices=current_indices
+                )
                 current_nside = new_nside
                 self.layers_use.append(layer)
             else:
@@ -139,7 +164,7 @@ class HealpyGCNN(Sequential):
                 current_Fin = layer.Fout
             except AttributeError:
                 # don't update, this is for example the case for residual or pooling layers that have Fin = Fout
-                pass 
+                pass
 
         # Now that we have everything we can super init...
         super(HealpyGCNN, self).__init__(layers=self.layers_use)
@@ -178,7 +203,7 @@ class HealpyGCNN(Sequential):
         # possible in res layers
         if Fout is None:
             # Fin == Fout = prod(
-            Fout = int(np.sqrt(np.prod(trained_weights.shape)//K))
+            Fout = int(np.sqrt(np.prod(trained_weights.shape) // K))
         trained_weights = trained_weights.reshape((-1, K, Fout))
 
         # Fin x K x Fout => K x Fout x Fin
@@ -189,7 +214,7 @@ class HealpyGCNN(Sequential):
             trained_weights = trained_weights[:, ind_out, :]
         return trained_weights
 
-    def get_gsp_filters(self, layer,  ind_in=None, ind_out=None, return_weights=False):
+    def get_gsp_filters(self, layer, ind_in=None, ind_out=None, return_weights=False):
         """
         Get the filter as a pygsp format
         :param layer: index (int) or name of the layer. Can be figured out with <print_summary>.
@@ -210,18 +235,22 @@ class HealpyGCNN(Sequential):
         # check if the layer is actually the right type
         if isinstance(tf_layer, gnn.GCNN_ResidualLayer):
             if not (isinstance(tf_layer.layer1, gnn.Chebyshev) and isinstance(tf_layer.layer2, gnn.Chebyshev)):
-                raise ValueError(f"The requested layer ({layer}) is of type {type(tf_layer)}, but only "
-                                 f"Chebyshev5 or GCNN_ResidualLayer layers (with Chebyshev5 sublayers) "
-                                 f"are supported...")
+                raise ValueError(
+                    f"The requested layer ({layer}) is of type {type(tf_layer)}, but only "
+                    f"Chebyshev5 or GCNN_ResidualLayer layers (with Chebyshev5 sublayers) "
+                    f"are supported..."
+                )
         elif not isinstance(tf_layer, gnn.Chebyshev):
-            raise ValueError(f"The requested layer ({layer}) is of type {type(tf_layer)}, but only "
-                             f"Chebyshev5 or GCNN_ResidualLayer layers (with Chebyshev5 sublayers) "
-                             f"are supported...")
+            raise ValueError(
+                f"The requested layer ({layer}) is of type {type(tf_layer)}, but only "
+                f"Chebyshev5 or GCNN_ResidualLayer layers (with Chebyshev5 sublayers) "
+                f"are supported..."
+            )
 
         # we get the weights
         if isinstance(tf_layer, gnn.GCNN_ResidualLayer):
             # get the weights
-            #print(tf_layer.layer1.kernel)
+            # print(tf_layer.layer1.kernel)
             weight1 = self._get_filter_coeffs(tf_layer.layer1, ind_in=ind_in, ind_out=ind_out)
             weight2 = self._get_filter_coeffs(tf_layer.layer2, ind_in=ind_in, ind_out=ind_out)
             weights = [weight1, weight2]
@@ -245,20 +274,26 @@ class HealpyGCNN(Sequential):
         while nside != 1:
             nside = nside // 4
             reduction_fac += 1
-        nside = int(self.nside_in // 2**(reduction_fac))
+        nside = int(self.nside_in // 2 ** (reduction_fac))
 
         gsp_filters = []
         for weight in weights:
-            pygsp_graph = SphereHealpix(subdivisions=nside, indexes=np.arange(hp.nside2npix(nside)), nest=True,
-                                       k=self.n_neighbors, lap_type='normalized')
-            #pygsp_graph = utils.healpix_graph(nside=nside)
+            pygsp_graph = SphereHealpix(
+                subdivisions=nside,
+                indexes=np.arange(hp.nside2npix(nside)),
+                nest=True,
+                k=self.n_neighbors,
+                lap_type="normalized",
+            )
+            # pygsp_graph = utils.healpix_graph(nside=nside)
             pygsp_graph.estimate_lmax()
             gsp_filters.append(filters.Chebyshev(pygsp_graph, weight))
 
         return gsp_filters
 
-    def plot_chebyshev_coeffs(self, layer, ind_in=None, ind_out=None,  ax=None,
-                              title='Chebyshev coefficients - layer {}'):
+    def plot_chebyshev_coeffs(
+        self, layer, ind_in=None, ind_out=None, ax=None, title="Chebyshev coefficients - layer {}"
+    ):
         """
         Plot the Chebyshev coefficients of a layer.
         layer : index (int) or name of the layer. Can be figured out with <print_summary>.
@@ -273,11 +308,11 @@ class HealpyGCNN(Sequential):
 
         for weight in weights:
             K, Fout, Fin = weight.shape
-            ax.plot(weight.reshape((K, Fin*Fout)), '.')
+            ax.plot(weight.reshape((K, Fin * Fout)), ".")
             ax.set_title(title.format(layer))
         return ax
 
-    def plot_filters_spectral(self, layer,  ind_in=None, ind_out=None, ax=None, **kwargs):
+    def plot_filters_spectral(self, layer, ind_in=None, ind_out=None, ax=None, **kwargs):
         """Plot the filter of a special layer in the spectral domain.
 
         Parameters
@@ -288,7 +323,7 @@ class HealpyGCNN(Sequential):
         ax : axes (optional)
         """
 
-        filters = self.get_gsp_filters(layer,  ind_in=ind_in, ind_out=ind_out)
+        filters = self.get_gsp_filters(layer, ind_in=ind_in, ind_out=ind_out)
         if ax is None:
             ax = plt.gca()
         for filter in filters:
@@ -296,7 +331,7 @@ class HealpyGCNN(Sequential):
 
         return ax
 
-    def plot_filters_section(self, layer,  ind_in=None, ind_out=None, ax=None, **kwargs):
+    def plot_filters_section(self, layer, ind_in=None, ind_out=None, ax=None, **kwargs):
         """Plot the filter section on the sphere
 
         Parameters
@@ -307,7 +342,7 @@ class HealpyGCNN(Sequential):
         ax : axes (optional)
         """
 
-        filters = self.get_gsp_filters(layer,  ind_in=ind_in, ind_out=ind_out)
+        filters = self.get_gsp_filters(layer, ind_in=ind_in, ind_out=ind_out)
 
         # get the layer (for K)
         if isinstance(layer, int):
@@ -324,7 +359,7 @@ class HealpyGCNN(Sequential):
             figs.append(plot.plot_filters_section(filter, order=K, **kwargs))
         return figs
 
-    def plot_filters_gnomonic(self, layer,  ind_in=None, ind_out=None, **kwargs):
+    def plot_filters_gnomonic(self, layer, ind_in=None, ind_out=None, **kwargs):
         """Plot the filter localization on gnomonic view.
 
         Parameters
@@ -334,7 +369,7 @@ class HealpyGCNN(Sequential):
         ind_out : index(es) of the output filter(s) (default None, all the filters)
         """
 
-        filters = self.get_gsp_filters(layer,  ind_in=ind_in, ind_out=ind_out)
+        filters = self.get_gsp_filters(layer, ind_in=ind_in, ind_out=ind_out)
 
         # get the layer (for K)
         if isinstance(layer, int):
