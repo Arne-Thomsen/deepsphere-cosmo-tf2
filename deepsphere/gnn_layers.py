@@ -101,10 +101,7 @@ class Chebyshev(Model):
             self.bias = self.add_weight("bias", shape=[1, 1, Fout])
 
         # we cast the sparse L to the current backend type
-        if tf.keras.backend.floatx() == "float32":
-            self.sparse_L = tf.cast(self.sparse_L, tf.float32)
-        if tf.keras.backend.floatx() == "float64":
-            self.sparse_L = tf.cast(self.sparse_L, tf.float64)
+        self.sparse_L = tf.cast(self.sparse_L, tf.keras.mixed_precision.global_policy().compute_dtype)
 
     def call(self, input_tensor, training=False):
         """
@@ -252,10 +249,7 @@ class Monomial(Model):
             self.bias = self.add_weight("bias", shape=[1, 1, Fout])
 
         # we cast the sparse L to the current backend type
-        if tf.keras.backend.floatx() == "float32":
-            self.sparse_L = tf.cast(self.sparse_L, tf.float32)
-        if tf.keras.backend.floatx() == "float64":
-            self.sparse_L = tf.cast(self.sparse_L, tf.float64)
+        self.sparse_L = tf.cast(self.sparse_L, tf.keras.mixed_precision.global_policy().compute_dtype)
 
     def call(self, input_tensor, training=False):
         """
@@ -510,10 +504,7 @@ class Bernstein(Model):
             self.bias = self.add_weight("bias", shape=[1, 1, Fout])
 
         # we cast the sparse L to the current backend type
-        if tf.keras.backend.floatx() == "float32":
-            self.sparse_L = tf.cast(self.sparse_L, tf.float32)
-        if tf.keras.backend.floatx() == "float64":
-            self.sparse_L = tf.cast(self.sparse_L, tf.float64)
+        self.sparse_L = tf.cast(self.sparse_L, tf.keras.mixed_precision.global_policy().compute_dtype)
 
     def call(self, input_tensor, training=False, *args, **kwargs):
         """

@@ -576,6 +576,7 @@ class HealpySmoothing(Model):
         self.per_channel_repetitions = per_channel_repetitions
         self.data_path = data_path
         self.max_batch_size = max_batch_size
+        self.layer_compute_dtype = tf.keras.mixed_precision.global_policy().compute_dtype
 
         if self.fwhm == 0.0 or self.sigma == 0.0:
             self.do_smoothing = False
@@ -693,7 +694,7 @@ class HealpySmoothing(Model):
                 ), f"The list per_channel_repetitions has to contain integers only"
 
             if self.mask is not None:
-                self.mask = tf.cast(self.mask, dtype=tf.float32)
+                self.mask = tf.cast(self.mask, dtype=self.layer_compute_dtype)
                 if tf.rank(self.mask).numpy() == 1:
                     self.mask = tf.expand_dims(self.mask, axis=0)
                     self.mask = tf.expand_dims(self.mask, axis=-1)
@@ -826,6 +827,8 @@ class HealpySmoothing(Model):
 
     def _build_sparse_tensor(self) -> None:
         """Builds the tf.sparse.SparseTensor from the dense indices and values."""
+        self.val_coo = tf.cast(self.val_coo, dtype=self.layer_compute_dtype)
+
         self.sparse_kernel = tf.sparse.SparseTensor(
             indices=self.ind_coo,
             values=self.val_coo,
