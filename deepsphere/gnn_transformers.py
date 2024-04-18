@@ -282,6 +282,8 @@ class Graph_ViT(Model):
         # check p
         if not p > 1:
             raise IOError("The super pixel size factor p has to be at least 1!")
+        else:
+            print(f"Every patch consists of {4**p} HEALPix pixels")
 
         # save variables
         self.p = p
