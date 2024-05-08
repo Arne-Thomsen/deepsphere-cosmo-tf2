@@ -23,6 +23,7 @@ class Chebyshev(Model):
         use_bias=False,
         use_bn=False,
         n_matmul_splits=1,
+        depth_wise=False,
         **kwargs,
     ):
         """
@@ -36,6 +37,8 @@ class Chebyshev(Model):
         :param use_bn: Apply batch norm before adding the bias
         :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the
             tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
+        :param depth_wise: Whether to use depthwise convolutions, that is convolutions that don't mix the features (so
+            F_in = F_out)
         :param kwargs: additional keyword arguments passed on to add_weight
         """
 
@@ -60,6 +63,7 @@ class Chebyshev(Model):
         else:
             raise ValueError(f"Could not find activation <{activation}> in tf.keras.activations...")
         self.n_matmul_splits = n_matmul_splits
+        self.depth_wise = depth_wise
         self.kwargs = kwargs
 
         # Rescale Laplacian and store as a TF sparse tensor. Copy to not modify the shared L.
@@ -80,6 +84,8 @@ class Chebyshev(Model):
 
         # get the input shape
         Fin = int(input_shape[-1])
+        if self.depth_wise:
+            assert Fout is None or Fout == Fin, "For depthwise convolutions, Fout has to be None or equal to Fin"
 
         # get Fout if necessary
         if self.Fout is None:
@@ -91,11 +97,15 @@ class Chebyshev(Model):
             # Filter: Fin*Fout filters of order K, i.e. one filterbank per output feature.
             stddev = 1 / np.sqrt(Fin * (self.K + 0.5) / 2)
             initializer = tf.initializers.TruncatedNormal(stddev=stddev)
+        else:
+            initializer = self.initializer
+
+        if not self.depth_wise:
+            # mix the input features
             self.kernel = self.add_weight("kernel", shape=[self.K * Fin, Fout], initializer=initializer, **self.kwargs)
         else:
-            self.kernel = self.add_weight(
-                "kernel", shape=[self.K * Fin, Fout], initializer=self.initializer, **self.kwargs
-            )
+            # don't mix the input features, so fewer weights
+            self.kernel = self.add_weight("kernel", shape=[Fin, self.K], initializer=initializer, **self.kwargs)
 
         if self.use_bias:
             self.bias = self.add_weight("bias", shape=[1, 1, Fout])
@@ -141,10 +151,15 @@ class Chebyshev(Model):
         x = tf.stack(stack, axis=0)  # K x M x Fin*N
         x = tf.reshape(x, [self.K, M, Fin, -1])  # K x M x Fin x N
         x = tf.transpose(x, perm=[3, 1, 2, 0])  # N x M x Fin x K
-        x = tf.reshape(x, [-1, Fin * self.K])  # N*M x Fin*K
-        # Filter: Fin*Fout filters of order K, i.e. one filterbank per output feature.
-        x = tf.matmul(x, self.kernel)  # N*M x Fout
-        x = tf.reshape(x, [-1, M, Fout])  # N x M x Fout
+
+        if not self.depth_wise:
+            x = tf.reshape(x, [-1, Fin * self.K])  # N*M x Fin*K
+            # Filter: Fin*Fout filters of order K, i.e. one filterbank per output feature.
+            x = tf.matmul(x, self.kernel)  # N*M x Fout
+            x = tf.reshape(x, [-1, M, Fout])  # N x M x Fout
+        else:
+            # one single filter (not bank) per input feature
+            x = tf.einsum("ijkl,kl->ijk", x, self.kernel)  # N x M x Fin
 
         if self.use_bn:
             x = self.bn(x, training=training)
