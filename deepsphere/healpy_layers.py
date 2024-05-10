@@ -519,6 +519,7 @@ class HealpySmoothing(Model):
         n_sigma_support: Union[int, float] = 3,
         arcmin: bool = True,
         per_channel_repetitions: Optional[Union[list, np.ndarray]] = None,
+        white_noise_sigma: Optional[Union[int, float, list]] = None,
         # computational
         data_path: Optional[str] = None,
         max_batch_size: Optional[int] = None,
@@ -537,10 +538,9 @@ class HealpySmoothing(Model):
         :param mask: Boolean tensor of shape (n_indices, 1) or (n_indices, n_channels)
                      that indicates which part of the patch defined by the indices is actually populated. Defaults to
                      None, then no additional masking is applied and the maps bleed into the zero padding.
-        :param fwhm: FWHM of the Gaussian smoothing kernel. Can be either a single
-                     or per channel number. In the latter case, the smoothing scale of the kernel is chosen as the
-                     smallest value and the rest achieved by smoothing repeatedly. Defaults to None, then sigma needs
-                     to be specified.
+        :param fwhm: FWHM of the Gaussian smoothing kernel. Can be either a single or per channel number. In the latter
+                     case, the smoothing scale of the kernel is chosen as the smallest value and the rest achieved by
+                     smoothing repeatedly. Defaults to None, then sigma needs to be specified.
         :param sigma: Identical functionality as the fwhm argument, but specifies the standard deviation of the
                       Gaussian smoothing kernel instead. Defaults to None, then fwhm needs to be specified.
         :param n_sigma_support: Determines the radius from which the smoothing is calculated. Specifically, this value
@@ -550,6 +550,9 @@ class HealpySmoothing(Model):
         :param per_channel_repetitions: When a single value is specified for fwhm or sigma, this argument determines
                                         the per channel number of times the smoothing kernel is applied. Defaults to
                                         None.
+        :param white_noise_sigma: Standard deviation of the white noise to add to the smoothed map. This is done to
+                                  destroy information above some l_max, which has to be chosen according to the fwhm
+                                  and the map type under consideration.
         :param data_path: Path where the sparse kernel tensor is stored to, and if available, loaded from. Defaults to
                           None, then the sparse kernel tensor is neither saved nor loaded.
         :param max_batch_size: Maximal batch size this network is supposed to handle. This determines the number of
@@ -574,6 +577,7 @@ class HealpySmoothing(Model):
         self.n_sigma_support = n_sigma_support
         self.arcmin = arcmin
         self.per_channel_repetitions = per_channel_repetitions
+        self.white_noise_sigma = white_noise_sigma
         self.data_path = data_path
         self.max_batch_size = max_batch_size
         self.layer_compute_dtype = tf.keras.mixed_precision.global_policy().compute_dtype
@@ -660,6 +664,19 @@ class HealpySmoothing(Model):
             self._build_sparse_tensor()
             print(f"Successfully created the sparse kernel tensor")
 
+        # white noise
+        if self.white_noise_sigma is not None:
+            print(f"Adding white noise with sigma {self.white_noise_sigma} to the smoothed map")
+            self.white_noise_layer = utils.GaussianNoiseLayer(self.white_noise_sigma)
+
+            if mask is None:
+                print(
+                    f"Warning, you're adding white noise to the maps but haven't provided a mask! The noise will "
+                    f"extend to the padding"
+                )
+        else:
+            self.white_noise_layer = None
+
     def build(self, input_shape: tuple) -> None:
         """
         Checks whether the input shape is compatible with the initialized layer. Note that the sparse-dense matrix
@@ -717,6 +734,9 @@ class HealpySmoothing(Model):
                 ):
                     self.n_matmul_splits += 1
 
+            if self.white_noise_layer is not None:
+                self.white_noise_layer.build(input_shape)
+
             print(f"Successfully built the smoothing layer")
 
     def call(self, inputs: tf.Tensor) -> tf.Tensor:
@@ -751,6 +771,9 @@ class HealpySmoothing(Model):
 
             # (n_batch, n_indices, n_channels)
             channels_last = tf.transpose(channels_last, (1, 0, 2))
+
+            if self.white_noise_layer is not None:
+                channels_last = self.white_noise_layer(channels_last)
 
             if self.mask is not None:
                 channels_last *= self.mask

@@ -76,3 +76,24 @@ def split_sparse_dense_matmul(sparse_tensor, dense_tensor, n_splits=1):
         result = tf.sparse.sparse_dense_matmul(sparse_tensor, dense_tensor)
 
     return result
+
+
+class GaussianNoiseLayer(tf.keras.layers.Layer):
+    """
+    A layer that adds Gaussian noise to the input, where the standard deviation of the Gaussian can be set channel-wise
+    """
+
+    def __init__(self, stddev, **kwargs):
+        super(GaussianNoiseLayer, self).__init__(**kwargs)
+        self.stddev = tf.convert_to_tensor(stddev, dtype=tf.float32)
+
+    def build(self, input_shape):
+        if len(self.stddev.shape) == 0:
+            self.stddev = tf.ones((input_shape[-1],)) * self.stddev
+        elif self.stddev.shape[0] != input_shape[-1]:
+            raise ValueError("Length of stddev does not match the number of input channels")
+
+    def call(self, inputs):
+        noise = tf.random.normal(shape=tf.shape(inputs), mean=0.0, stddev=self.stddev)
+
+        return inputs + noise
