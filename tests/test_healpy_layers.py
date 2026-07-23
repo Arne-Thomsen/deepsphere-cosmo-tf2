@@ -131,3 +131,35 @@ def test_Healpy_ResidualLayer():
     out = res_layer(m_in)
 
     assert out.numpy().shape == (3, n_pix, 7)
+
+
+def test_HealpySmoothing_fwhm_base():
+    nside = 16
+    n_pix = hp.nside2npix(nside)
+    indices = np.arange(n_pix)
+    # nside 16 pixels are ~220 arcmin across, so these kernels span a few pixels
+    fwhm = [400.0, 200.0]
+
+    # default: base kernel = min(fwhm), repetitions from ceil((fwhm / min)^2)
+    layer = healpy_layers.HealpySmoothing(nside=nside, indices=indices, fwhm=fwhm, max_batch_size=2)
+    assert layer.fwhm_arcmin == pytest.approx(200.0)
+    assert np.all(layer.per_channel_repetitions == np.array([4, 1]))
+
+    # explicit finer base kernel: repetitions scale with (fwhm / fwhm_base)^2
+    layer = healpy_layers.HealpySmoothing(nside=nside, indices=indices, fwhm=fwhm, fwhm_base=100.0, max_batch_size=2)
+    assert layer.fwhm_arcmin == pytest.approx(100.0)
+    assert np.all(layer.per_channel_repetitions == np.array([16, 4]))
+
+    # the row-normalized kernel preserves a constant map for any repetition count
+    m_in = np.ones((2, n_pix, 2), dtype=np.float32)
+    out = layer(m_in)
+    assert out.numpy().shape == (2, n_pix, 2)
+    assert np.allclose(out.numpy(), 1.0, atol=1e-5)
+
+    # fwhm_base must not exceed the smallest per channel fwhm
+    with pytest.raises(AssertionError):
+        healpy_layers.HealpySmoothing(nside=nside, indices=indices, fwhm=fwhm, fwhm_base=300.0)
+
+    # fwhm_base is only meaningful together with a per channel fwhm list
+    with pytest.raises(AssertionError):
+        healpy_layers.HealpySmoothing(nside=nside, indices=indices, fwhm=200.0, fwhm_base=100.0)

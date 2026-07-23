@@ -127,3 +127,37 @@ def test_GCNN_ResidualLayer():
         res_layer = gnn_layers.GCNN_ResidualLayer(layer_type=layer_type, layer_kwargs=layer_kwargs,
                                                   activation=tf.keras.activations.relu, use_bn=True,
                                                   norm_type="moving_norm")
+
+
+@pytest.mark.parametrize("layer_cls", [gnn_layers.Chebyshev, gnn_layers.Monomial, gnn_layers.Bernstein])
+@pytest.mark.parametrize("backend", ["csr", "gather"])
+def test_spmm_backend_equivalence(layer_cls, backend):
+    """The "csr" (cuSPARSE) and "gather" (XLA-friendly) sparse-matmul backends must reproduce the
+    default "coo" path to float32 tolerance -- this is the correctness gate that makes the backend
+    an opt-in performance switch rather than a model change. Uses a real (sparse) HEALPix graph
+    Laplacian and copies the coo layer's weights so only the L @ x kernel differs."""
+    from pygsp.graphs import SphereHealpix
+
+    sphere = SphereHealpix(subdivisions=4, nest=True, k=20, lap_type="normalized")
+    L = np.asarray(sphere.L.todense(), dtype=np.float64)
+    npix = L.shape[0]
+    x = tf.random.normal(shape=(3, npix, 7), seed=12)
+
+    def build(be):
+        init = tf.initializers.RandomNormal(stddev=0.1, seed=13)
+        layer = layer_cls(L=L, Fout=5, K=4, initializer=init, use_bias=True, spmm_backend=be)
+        layer(x)  # trigger build so the weights exist
+        return layer
+
+    coo = build("coo")
+    other = build(backend)
+    # force identical kernel/bias so any output difference is purely the sparse-matmul backend
+    other.set_weights(coo.get_weights())
+
+    ref = coo(x).numpy()
+    # eager
+    np.testing.assert_allclose(other(x).numpy(), ref, rtol=2e-4, atol=2e-4)
+    # graph mode -- the way training runs the layer, and the only mode that exposes csr's captured
+    # CSRSparseMatrix-variant shape-inference bug (eager alone would pass right through it)
+    other_graph = tf.function(lambda t: other(t))
+    np.testing.assert_allclose(other_graph(x).numpy(), ref, rtol=2e-4, atol=2e-4)

@@ -181,3 +181,47 @@ def test_HealpyGCNN():
     out = model(m_in, training=True)
 
     assert out.numpy().shape == (3, 4)
+
+
+@pytest.mark.parametrize("backend", ["csr", "gather"])
+def test_HealpyGCNN_spmm_backend_equivalence(backend):
+    """End-to-end check that HealpyGCNN's spmm_backend threads through every graph-conv layer and
+    that the "csr"/"gather" backends reproduce the default "coo" network output to float32
+    tolerance. Builds two identical networks, copies the coo weights into the other backend, and
+    compares the forward pass so only the sparse-matmul kernel differs."""
+    tf.keras.backend.clear_session()
+
+    nside_in = 64
+    n_pix = hp.nside2npix(nside_in)
+    np.random.seed(11)
+    m_in = np.random.normal(size=[3, n_pix, 1]).astype(np.float32)
+    indices = np.arange(n_pix)
+
+    def make_layers():
+        return [hp_nn.HealpyPseudoConv(p=1, Fout=4),
+                hp_nn.HealpyChebyshev(K=5, Fout=8),
+                hp_nn.HealpyMonomial(K=4, Fout=8),
+                hp_nn.Healpy_ResidualLayer("CHEBY", layer_kwargs={"K": 5}),
+                tf.keras.layers.Flatten(),
+                tf.keras.layers.Dense(4)]
+
+    def build(be):
+        tf.random.set_seed(11)
+        model = HealpyGCNN(nside=nside_in, indices=indices, layers=make_layers(), spmm_backend=be)
+        model.build(input_shape=(3, n_pix, 1))
+        return model
+
+    coo = build("coo")
+    other = build(backend)
+    other.set_weights(coo.get_weights())
+
+    ref = coo(m_in).numpy()
+    # End-to-end tolerance is looser than the per-layer gnn_layers gate (2e-4): float32 accumulation
+    # differences (cuSPARSE csrmm sums in a different order than the generic kernel) compound across
+    # the 3 conv-bearing layers and are amplified by the final Dense, reaching ~3e-4 on near-zero
+    # outputs. 1e-3 comfortably covers that while still catching any real backend bug.
+    # eager
+    np.testing.assert_allclose(other(m_in).numpy(), ref, rtol=1e-3, atol=1e-3)
+    # graph mode -- how training runs the network; exposes csr's captured-variant shape-inference bug
+    other_graph = tf.function(lambda t: other(t))
+    np.testing.assert_allclose(other_graph(m_in).numpy(), ref, rtol=1e-3, atol=1e-3)

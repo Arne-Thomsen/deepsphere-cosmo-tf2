@@ -24,6 +24,7 @@ class Chebyshev(Model):
         use_bn=False,
         n_matmul_splits=1,
         depth_wise=False,
+        spmm_backend="coo",
         **kwargs,
     ):
         """
@@ -39,6 +40,8 @@ class Chebyshev(Model):
             tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
         :param depth_wise: Whether to use depthwise convolutions, that is convolutions that don't mix the features (so
             F_in = F_out)
+        :param spmm_backend: sparse-matmul backend for L @ x, one of "coo" (default, unchanged),
+            "csr" (cuSPARSE), or "gather" (XLA-friendly gather+reduce). See utils.make_spmm_operator.
         :param kwargs: additional keyword arguments passed on to add_weight
         """
 
@@ -64,6 +67,7 @@ class Chebyshev(Model):
             raise ValueError(f"Could not find activation <{activation}> in tf.keras.activations...")
         self.n_matmul_splits = n_matmul_splits
         self.depth_wise = depth_wise
+        self.spmm_backend = spmm_backend
         self.kwargs = kwargs
 
         # Rescale Laplacian and store as a TF sparse tensor. Copy to not modify the shared L.
@@ -72,6 +76,10 @@ class Chebyshev(Model):
         L = utils.rescale_L(L, lmax=lmax, scale=0.75)
         L = L.tocoo()
         indices = np.column_stack((L.row, L.col))
+        # capture the eager COO for the "csr"/"gather" backends, since build() may run inside a
+        # tf.function trace where self.sparse_L is symbolic (it is re-cast there) and not
+        # numpy-convertible; both backends need the host-side neighbour structure (see make_spmm_operator)
+        self._host_coo = (indices, L.data, L.shape[0]) if self.spmm_backend in ("csr", "gather") else None
         L = tf.SparseTensor(indices, L.data, L.shape)
         self.sparse_L = tf.sparse.reorder(L)
 
@@ -113,6 +121,11 @@ class Chebyshev(Model):
         # we cast the sparse L to the current backend type
         self.sparse_L = tf.cast(self.sparse_L, tf.keras.mixed_precision.global_policy().compute_dtype)
 
+        # precompute the L @ x operator once for the chosen sparse-matmul backend
+        self._L_op = utils.make_spmm_operator(
+            self.sparse_L, self.spmm_backend, self.n_matmul_splits, host_coo=self._host_coo
+        )
+
     def call(self, input_tensor, training=False):
         """
         Calls the layer on an input tensor
@@ -142,10 +155,10 @@ class Chebyshev(Model):
         stack = [x0]
 
         if self.K > 1:
-            x1 = utils.split_sparse_dense_matmul(self.sparse_L, x0, self.n_matmul_splits)
+            x1 = self._L_op(x0)
             stack.append(x1)
         for k in range(2, self.K):
-            x2 = 2 * utils.split_sparse_dense_matmul(self.sparse_L, x1, self.n_matmul_splits) - x0  # M x Fin*N
+            x2 = 2 * self._L_op(x1) - x0  # M x Fin*N
             stack.append(x2)
             x0, x1 = x1, x2
         x = tf.stack(stack, axis=0)  # K x M x Fin*N
@@ -188,6 +201,7 @@ class Monomial(Model):
         use_bias=False,
         use_bn=False,
         n_matmul_splits=1,
+        spmm_backend="coo",
         **kwargs,
     ):
         """
@@ -201,6 +215,8 @@ class Monomial(Model):
         :param use_bn: Apply batch norm before adding the bias
         :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the
             tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
+        :param spmm_backend: sparse-matmul backend for L @ x, one of "coo" (default, unchanged),
+            "csr" (cuSPARSE), or "gather" (XLA-friendly gather+reduce). See utils.make_spmm_operator.
         :param kwargs: additional keyword arguments passed on to add_weight
         """
 
@@ -225,6 +241,7 @@ class Monomial(Model):
         else:
             raise ValueError(f"Could not find activation <{activation}> in tf.keras.activations...")
         self.n_matmul_splits = n_matmul_splits
+        self.spmm_backend = spmm_backend
         self.kwargs = kwargs
 
         # Rescale Laplacian and store as a TF sparse tensor. Copy to not modify the shared L.
@@ -233,6 +250,10 @@ class Monomial(Model):
         L = utils.rescale_L(L, lmax=lmax)
         L = L.tocoo()
         indices = np.column_stack((L.row, L.col))
+        # capture the eager COO for the "csr"/"gather" backends, since build() may run inside a
+        # tf.function trace where self.sparse_L is symbolic (it is re-cast there) and not
+        # numpy-convertible; both backends need the host-side neighbour structure (see make_spmm_operator)
+        self._host_coo = (indices, L.data, L.shape[0]) if self.spmm_backend in ("csr", "gather") else None
         L = tf.SparseTensor(indices, L.data, L.shape)
         self.sparse_L = tf.sparse.reorder(L)
 
@@ -266,6 +287,11 @@ class Monomial(Model):
         # we cast the sparse L to the current backend type
         self.sparse_L = tf.cast(self.sparse_L, tf.keras.mixed_precision.global_policy().compute_dtype)
 
+        # precompute the L @ x operator once for the chosen sparse-matmul backend
+        self._L_op = utils.make_spmm_operator(
+            self.sparse_L, self.spmm_backend, self.n_matmul_splits, host_coo=self._host_coo
+        )
+
     def call(self, input_tensor, training=False):
         """
         Calls the layer on an input tensor
@@ -295,7 +321,7 @@ class Monomial(Model):
         stack = [x0]
 
         for k in range(1, self.K):
-            x1 = utils.split_sparse_dense_matmul(self.sparse_L, x0, self.n_matmul_splits)  # M x Fin*N
+            x1 = self._L_op(x0)  # M x Fin*N
             stack.append(x1)
             x0 = x1
 
@@ -439,6 +465,7 @@ class Bernstein(Model):
         use_bias=False,
         use_bn=False,
         n_matmul_splits=1,
+        spmm_backend="coo",
         **kwargs,
     ):
         """
@@ -452,6 +479,8 @@ class Bernstein(Model):
         :param use_bn: Apply batch norm before adding the bias
         :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the
             tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
+        :param spmm_backend: sparse-matmul backend for L @ x, one of "coo" (default, unchanged),
+            "csr" (cuSPARSE), or "gather" (XLA-friendly gather+reduce). See utils.make_spmm_operator.
         :param kwargs: additional keyword arguments passed on to add_weight
         """
 
@@ -476,6 +505,7 @@ class Bernstein(Model):
         else:
             raise ValueError(f"Could not find activation <{activation}> in tf.keras.activations...")
         self.n_matmul_splits = n_matmul_splits
+        self.spmm_backend = spmm_backend
         self.kwargs = kwargs
 
         # Rescale Laplacian and store as a TF sparse tensor. Copy to not modify the shared L.
@@ -484,6 +514,10 @@ class Bernstein(Model):
         L = utils.rescale_L(L, lmax=lmax, scale=0.75)
         L = L.tocoo()
         indices = np.column_stack((L.row, L.col))
+        # capture the eager COO for the "csr"/"gather" backends, since build() may run inside a
+        # tf.function trace where self.sparse_L is symbolic (it is re-cast there) and not
+        # numpy-convertible; both backends need the host-side neighbour structure (see make_spmm_operator)
+        self._host_coo = (indices, L.data, L.shape[0]) if self.spmm_backend in ("csr", "gather") else None
         L = tf.SparseTensor(indices, L.data, L.shape)
         self.sparse_L = tf.sparse.reorder(L)
 
@@ -521,6 +555,11 @@ class Bernstein(Model):
         # we cast the sparse L to the current backend type
         self.sparse_L = tf.cast(self.sparse_L, tf.keras.mixed_precision.global_policy().compute_dtype)
 
+        # precompute the L @ x operator once for the chosen sparse-matmul backend
+        self._L_op = utils.make_spmm_operator(
+            self.sparse_L, self.spmm_backend, self.n_matmul_splits, host_coo=self._host_coo
+        )
+
     def call(self, input_tensor, training=False, *args, **kwargs):
         """
         Calls the layer on a input tensor
@@ -554,11 +593,11 @@ class Bernstein(Model):
             x1 = x0
             theta = comb(self.K, i) / (2**self.K)
             for j in range(i):
-                x2 = utils.split_sparse_dense_matmul(self.sparse_L, x1, self.n_matmul_splits)
+                x2 = self._L_op(x1)
                 x1 = x2
             x2 = x1
             for k in range(self.K - i):
-                x3 = 2 * x2 - utils.split_sparse_dense_matmul(self.sparse_L, x2, self.n_matmul_splits)
+                x3 = 2 * x2 - self._L_op(x2)
                 x2 = x3
             x3 = theta * x3
             stack.append(x3)

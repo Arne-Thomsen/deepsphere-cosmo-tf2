@@ -17,7 +17,9 @@ class HealpyGCNN(Sequential):
     A graph convolutional network using the Keras model API and the layers from the model
     """
 
-    def __init__(self, nside, indices, layers, n_neighbors=8, max_batch_size=None, initial_Fin=None):
+    def __init__(
+        self, nside, indices, layers, n_neighbors=8, max_batch_size=None, initial_Fin=None, spmm_backend="coo"
+    ):
         """
         Initializes a graph convolutional neural network using the healpy pixelization scheme
         :param nside: integeger, the nside of the input
@@ -31,6 +33,9 @@ class HealpyGCNN(Sequential):
                                 taken, which may cause an error.
         :param initial_Fin: Initial number of input features. Defaults to None, then like for max_batch_size, there
                             are no precautions in the tf.sparse.sparse_dense_matmul operation taken.
+        :param spmm_backend: sparse-matmul backend for every graph convolution's L @ x, one of "coo" (default,
+                            unchanged behaviour), "csr" (cuSPARSE csrmm) or "gather" (XLA-friendly gather+reduce).
+                            See deepsphere.utils.make_spmm_operator.
         """
         # This is necessary for every Layer
         super(HealpyGCNN, self).__init__(name="")
@@ -47,6 +52,7 @@ class HealpyGCNN(Sequential):
         self.indices_in = indices
         self.layers_in = layers
         self.n_neighbors = n_neighbors
+        self.spmm_backend = spmm_backend
 
         # first we check the consistency, by getting the total reduction factor of the nside
         self.reduction_fac = 1.0
@@ -134,10 +140,10 @@ class HealpyGCNN(Sequential):
                             (n_matmul_splits >= max_batch_size * current_Fin * len(current_L.indices) / 2**31)
                         ):
                             n_matmul_splits += 1
-                        actual_layer = layer._get_layer(current_L, n_matmul_splits)
+                        actual_layer = layer._get_layer(current_L, n_matmul_splits, self.spmm_backend)
 
                     else:
-                        actual_layer = layer._get_layer(current_L)
+                        actual_layer = layer._get_layer(current_L, spmm_backend=self.spmm_backend)
                 else:
                     actual_layer = layer._get_layer(current_L)
                 self.layers_use.append(actual_layer)

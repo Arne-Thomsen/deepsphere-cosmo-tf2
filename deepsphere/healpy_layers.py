@@ -233,12 +233,13 @@ class HealpyChebyshev:
         self.use_bn = use_bn
         self.kwargs = kwargs
 
-    def _get_layer(self, L, n_matmul_splits=1):
+    def _get_layer(self, L, n_matmul_splits=1, spmm_backend="coo"):
         """
         initializes the actual layer, should be called once the graph Laplacian has been calculated
         :param L: the graph laplacian
         :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the
                                 tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
+        :param spmm_backend: sparse-matmul backend for L @ x ("coo"/"csr"/"gather"), see utils.make_spmm_operator
         :return: Chebyshev5 layer that can be called
         """
 
@@ -252,6 +253,7 @@ class HealpyChebyshev:
             use_bias=self.use_bias,
             use_bn=self.use_bn,
             n_matmul_splits=n_matmul_splits,
+            spmm_backend=spmm_backend,
             **self.kwargs,
         )
 
@@ -282,12 +284,13 @@ class HealpyMonomial:
         self.use_bn = use_bn
         self.kwargs = kwargs
 
-    def _get_layer(self, L, n_matmul_splits=1):
+    def _get_layer(self, L, n_matmul_splits=1, spmm_backend="coo"):
         """
         initializes the actual layer, should be called once the graph Laplacian has been calculated
         :param L: the graph laplacian
         :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the
                                 tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
+        :param spmm_backend: sparse-matmul backend for L @ x ("coo"/"csr"/"gather"), see utils.make_spmm_operator
         :return: Monomial layer that can be called
         """
 
@@ -301,6 +304,7 @@ class HealpyMonomial:
             use_bias=self.use_bias,
             use_bn=self.use_bn,
             n_matmul_splits=n_matmul_splits,
+            spmm_backend=spmm_backend,
             **self.kwargs,
         )
 
@@ -346,17 +350,19 @@ class Healpy_ResidualLayer:
         self.bn_kwargs = bn_kwargs
         self.alpha = alpha
 
-    def _get_layer(self, L, n_matmul_splits=1):
+    def _get_layer(self, L, n_matmul_splits=1, spmm_backend="coo"):
         """
         initializes the actual layer, should be called once the graph Laplacian has been calculated
         :param L: the graph laplacian
         :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the
                                 tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
+        :param spmm_backend: sparse-matmul backend for L @ x ("coo"/"csr"/"gather"), see utils.make_spmm_operator
         :return: GCNN_ResidualLayer layer that can be called
         """
         # we add the graph laplacian to all kwargs
         self.layer_kwargs.update({"L": L})
         self.layer_kwargs.update({"n_matmul_splits": n_matmul_splits})
+        self.layer_kwargs.update({"spmm_backend": spmm_backend})
 
         return GCNN_ResidualLayer(
             layer_type=self.layer_type,
@@ -478,12 +484,13 @@ class HealpyBernstein:
         self.use_bn = use_bn
         self.kwargs = kwargs
 
-    def _get_layer(self, L, n_matmul_splits=1):
+    def _get_layer(self, L, n_matmul_splits=1, spmm_backend="coo"):
         """
         initializes the actual layer, should be called once the graph Laplacian has been calculated
         :param L: the graph laplacian
         :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the
             tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
+        :param spmm_backend: sparse-matmul backend for L @ x ("coo"/"csr"/"gather"), see utils.make_spmm_operator
         :return: Chebyshev5 layer that can be called
         """
 
@@ -497,6 +504,7 @@ class HealpyBernstein:
             use_bias=self.use_bias,
             use_bn=self.use_bn,
             n_matmul_splits=n_matmul_splits,
+            spmm_backend=spmm_backend,
             **self.kwargs,
         )
 
@@ -515,6 +523,7 @@ class HealpySmoothing(Model):
         mask: Optional[tf.Tensor] = None,
         # smoothing
         fwhm: Optional[Union[int, float, list]] = None,
+        fwhm_base: Optional[Union[int, float]] = None,
         sigma: Optional[Union[int, float, list]] = None,
         n_sigma_support: Union[int, float] = 3,
         arcmin: bool = True,
@@ -523,6 +532,7 @@ class HealpySmoothing(Model):
         # computational
         data_path: Optional[str] = None,
         max_batch_size: Optional[int] = None,
+        spmm_backend: str = "coo",
     ) -> None:
         """
         Initialize the sparse kernel tensor with which the maps are smoothed.
@@ -541,6 +551,11 @@ class HealpySmoothing(Model):
         :param fwhm: FWHM of the Gaussian smoothing kernel. Can be either a single or per channel number. In the latter
                      case, the smoothing scale of the kernel is chosen as the smallest value and the rest achieved by
                      smoothing repeatedly. Defaults to None, then sigma needs to be specified.
+        :param fwhm_base: Optional base kernel FWHM used together with a per channel fwhm list. The kernel is built at
+                          this scale and applied ceil((fwhm / fwhm_base)^2) times per channel, instead of deriving the
+                          base from min(fwhm). A value below min(fwhm) reduces the overshoot introduced by the ceil,
+                          at the cost of more repetitions. Must satisfy fwhm_base <= min(fwhm). Defaults to None, then
+                          min(fwhm) is used as before.
         :param sigma: Identical functionality as the fwhm argument, but specifies the standard deviation of the
                       Gaussian smoothing kernel instead. Defaults to None, then fwhm needs to be specified.
         :param n_sigma_support: Determines the radius from which the smoothing is calculated. Specifically, this value
@@ -559,6 +574,9 @@ class HealpySmoothing(Model):
                                splits in the tf.sparse.sparse_dense_matmul operation, which are subsequently applied
                                independent of the actual batch size. Defaults to None, then an attempt is made to infer
                                this from the input, which may cause an error.
+        :param spmm_backend: sparse-matmul backend for the kernel application ("coo"/"csr"/"gather"), see
+                             utils.make_spmm_operator. Defaults to "coo" (the unchanged tf.sparse.sparse_dense_matmul
+                             path). "csr" uses cuSPARSE csrmm; the split logic is bypassed there.
         """
         super(HealpySmoothing, self).__init__()
 
@@ -571,8 +589,12 @@ class HealpySmoothing(Model):
         # smoothing
         assert fwhm is not None or sigma is not None, f"One of fwhm and sigma has to be specified"
         assert fwhm is None or sigma is None, f"Only one of fwhm and sigma can be specified"
+        assert fwhm_base is None or isinstance(
+            fwhm, (list, np.ndarray)
+        ), f"fwhm_base requires a per channel fwhm list"
 
         self.fwhm = fwhm
+        self.fwhm_base = fwhm_base
         self.sigma = sigma
         self.n_sigma_support = n_sigma_support
         self.arcmin = arcmin
@@ -580,6 +602,7 @@ class HealpySmoothing(Model):
         self.white_noise_sigma = white_noise_sigma
         self.data_path = data_path
         self.max_batch_size = max_batch_size
+        self.spmm_backend = spmm_backend
         self.layer_compute_dtype = tf.keras.mixed_precision.global_policy().compute_dtype
 
         if self.fwhm == 0.0 or self.sigma == 0.0:
@@ -595,8 +618,16 @@ class HealpySmoothing(Model):
 
                 self.fwhm = np.array(self.fwhm)
 
-                # smallest smoothing scale from which the others are derived by looping
-                fwhm_min = np.min(self.fwhm)
+                # smallest smoothing scale from which the others are derived by looping, unless an
+                # explicit (finer) base kernel scale is requested
+                if self.fwhm_base is not None:
+                    assert self.fwhm_base <= np.min(self.fwhm), (
+                        f"fwhm_base ({self.fwhm_base}) must not exceed the smallest per channel fwhm "
+                        f"({np.min(self.fwhm)})"
+                    )
+                    fwhm_min = self.fwhm_base
+                else:
+                    fwhm_min = np.min(self.fwhm)
 
                 # ceil to be conservative, square because Gaussian variances are added (not stds)
                 self.per_channel_repetitions = np.ceil((self.fwhm / fwhm_min) ** 2).astype(int)
@@ -734,6 +765,11 @@ class HealpySmoothing(Model):
                 ):
                     self.n_matmul_splits += 1
 
+            # precompute the kernel-application operator once for the chosen sparse-matmul backend
+            self._smooth_op = utils.make_spmm_operator(
+                self.sparse_kernel, self.spmm_backend, self.n_matmul_splits
+            )
+
             if self.white_noise_layer is not None:
                 self.white_noise_layer.build(input_shape)
 
@@ -756,13 +792,9 @@ class HealpySmoothing(Model):
             for i, single_channel in enumerate(separate_channels):
                 if self.per_channel_repetitions is not None:
                     for _ in range(self.per_channel_repetitions[i]):
-                        single_channel = utils.split_sparse_dense_matmul(
-                            self.sparse_kernel, single_channel, self.n_matmul_splits
-                        )
+                        single_channel = self._smooth_op(single_channel)
                 else:
-                    single_channel = utils.split_sparse_dense_matmul(
-                        self.sparse_kernel, single_channel, self.n_matmul_splits
-                    )
+                    single_channel = self._smooth_op(single_channel)
 
                 stack.append(single_channel)
 
@@ -845,8 +877,16 @@ class HealpySmoothing(Model):
             )
 
             os.makedirs(self.data_path, exist_ok=True)
-            np.save(os.path.join(self.data_path, f"ind_coo{self.file_label}.npy"), np_ind_coo)
-            np.save(os.path.join(self.data_path, f"val_coo{self.file_label}.npy"), np_val_coo)
+            # under multi_worker_mirrored/horovod every task builds the same kernel and races on
+            # these cache files (concurrent np.save to one Lustre file fails with EIO) — write a
+            # per-task temp file and atomically rename, so the last complete writer wins
+            for file_name, array in (
+                (f"ind_coo{self.file_label}.npy", np_ind_coo),
+                (f"val_coo{self.file_label}.npy", np_val_coo),
+            ):
+                tmp_path = os.path.join(self.data_path, f".{file_name}.{os.getpid()}.{os.uname().nodename}.npy")
+                np.save(tmp_path, array)
+                os.replace(tmp_path, os.path.join(self.data_path, file_name))
 
     def _build_sparse_tensor(self) -> None:
         """Builds the tf.sparse.SparseTensor from the dense indices and values."""
