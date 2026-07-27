@@ -93,7 +93,9 @@ class Chebyshev(Model):
         # get the input shape
         Fin = int(input_shape[-1])
         if self.depth_wise:
-            assert Fout is None or Fout == Fin, "For depthwise convolutions, Fout has to be None or equal to Fin"
+            assert (
+                self.Fout is None or self.Fout == Fin
+            ), "For depthwise convolutions, Fout has to be None or equal to Fin"
 
         # get Fout if necessary
         if self.Fout is None:
@@ -451,6 +453,143 @@ class GCNN_ResidualLayer(Model):
             return self.activation(x) + self.alpha * input_tensor
         else:
             return self.activation(x + self.alpha * input_tensor)
+
+
+class DropPath(tf.keras.layers.Layer):
+    """Stochastic depth: drop the whole residual branch per sample during training.
+
+    timm-style (arXiv:1603.09382). At training time each sample keeps the branch with probability
+    ``1 - rate`` and the kept branches are rescaled by ``1 / (1 - rate)`` so the expectation is
+    unchanged; at inference (or ``rate == 0``) it is the identity. Applied to the residual branch of
+    ``GCNN_ConvNeXtLayer`` (the block's ``x + DropPath(branch)``).
+    """
+
+    def __init__(self, rate=0.0, **kwargs):
+        super().__init__(**kwargs)
+        if not 0.0 <= rate < 1.0:
+            raise ValueError(f"DropPath rate must be in [0, 1), got {rate}")
+        self.rate = rate
+
+    def call(self, x, training=False):
+        if not training or self.rate == 0.0:
+            return x
+        keep_prob = 1.0 - self.rate
+        # one Bernoulli draw per sample, broadcast over the remaining (pixel, channel) axes
+        shape = [tf.shape(x)[0]] + [1] * (len(x.shape) - 1)
+        random_tensor = keep_prob + tf.random.uniform(shape, dtype=x.dtype)
+        binary_mask = tf.floor(random_tensor)
+        return (x / keep_prob) * binary_mask
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"rate": self.rate})
+        return config
+
+
+class GCNN_ConvNeXtLayer(Model):
+    """ConvNeXt-style graph-conv block (arXiv:2201.03545), channel-preserving ``(N, M, C) -> (N, M, C)``.
+
+    Unlike ``GCNN_ResidualLayer`` (two full ChebK convs, spatial+channel mixing entangled), this
+    block *separates* spatial from channel mixing, the ConvNeXt idiom:
+
+        h = depthwise_ChebK(x)      # spatial mix, one spectral filter per channel (no channel mixing)
+        h = LayerNorm(h)
+        h = Dense(mlp_ratio * C)(h) # pointwise 1x1 expand (inverted bottleneck)
+        h = activation(h)           # single activation (GELU)
+        h = Dense(C)(h)             # pointwise 1x1 contract
+        h = LayerScale(h)           # per-channel gamma, small init -> near-identity at start
+        h = DropPath(h)             # stochastic depth on the residual branch
+        return x + h
+
+    The depthwise spatial conv is ``Chebyshev(depth_wise=True)`` (Monomial/Bernstein have no
+    depthwise path), so this block is Chebyshev-only. It has ONE graph conv per block vs the residual
+    layer's two, i.e. ~half the sparse ``L @ x`` cost; and because the depthwise kernel is ``[C, K]``,
+    the polynomial order ``K`` only adds ``C * K`` params (no ``C^2`` blowup), so large receptive
+    fields (K=8-16) are cheap.
+    """
+
+    def __init__(
+        self,
+        L,
+        K,
+        mlp_ratio=4.0,
+        layer_scale_init=1e-6,
+        drop_path_rate=0.0,
+        activation="gelu",
+        norm_kwargs=None,
+        use_bias=True,
+        n_matmul_splits=1,
+        spmm_backend="coo",
+    ):
+        """
+        :param L: the graph Laplacian (injected by HealpyGCNN via Healpy_ConvNeXtLayer._get_layer)
+        :param K: Chebyshev polynomial order of the depthwise spatial conv
+        :param mlp_ratio: hidden width of the pointwise MLP as a multiple of the channel count C
+        :param layer_scale_init: LayerScale init; None disables LayerScale (unit-weight branch)
+        :param drop_path_rate: stochastic-depth rate on the residual branch (0.0 = off)
+        :param activation: MLP activation, string (resolved via tf.keras.activations) or callable
+        :param norm_kwargs: kwargs for the LayerNormalization (axis defaults to -1)
+        :param use_bias: use a bias in the depthwise conv
+        :param n_matmul_splits: sparse-matmul split count for the depthwise conv (from HealpyGCNN)
+        :param spmm_backend: sparse-matmul backend for the depthwise conv ("coo"/"csr"/"gather")
+        """
+        super().__init__()
+
+        if callable(activation):
+            self.activation = activation
+        elif hasattr(tf.keras.activations, activation):
+            self.activation = getattr(tf.keras.activations, activation)
+        else:
+            raise ValueError(f"Could not find activation <{activation}> in tf.keras.activations...")
+
+        self.mlp_ratio = mlp_ratio
+        self.layer_scale_init = layer_scale_init
+
+        norm_kwargs = {"axis": -1} if norm_kwargs is None else {"axis": -1, **norm_kwargs}
+
+        # depthwise spatial mixing: one spectral filter per channel, Fout=None keeps the width
+        self.dwconv = Chebyshev(
+            L=L,
+            K=K,
+            Fout=None,
+            depth_wise=True,
+            use_bias=use_bias,
+            activation=None,
+            use_bn=False,
+            n_matmul_splits=n_matmul_splits,
+            spmm_backend=spmm_backend,
+        )
+        self.norm = tf.keras.layers.LayerNormalization(**norm_kwargs)
+        self.drop_path = DropPath(drop_path_rate)
+        # the pointwise MLP and LayerScale gamma need the channel count, built lazily
+        self.pw_expand = None
+        self.pw_contract = None
+        self.gamma = None
+
+    def build(self, input_shape):
+        channels = int(input_shape[-1])
+        hidden = int(round(self.mlp_ratio * channels))
+        self.pw_expand = tf.keras.layers.Dense(hidden)
+        self.pw_contract = tf.keras.layers.Dense(channels)
+        if self.layer_scale_init is not None:
+            self.gamma = self.add_weight(
+                name="layer_scale",
+                shape=(channels,),
+                initializer=tf.keras.initializers.Constant(self.layer_scale_init),
+                trainable=True,
+            )
+        super().build(input_shape)
+
+    def call(self, input_tensor, training=False):
+        h = self.dwconv(input_tensor)
+        h = self.norm(h)
+        h = self.pw_expand(h)
+        h = self.activation(h)
+        h = self.pw_contract(h)
+        if self.gamma is not None:
+            h = h * tf.cast(self.gamma, h.dtype)
+        h = self.drop_path(h, training=training)
+        return input_tensor + h
 
 
 class Bernstein(Model):

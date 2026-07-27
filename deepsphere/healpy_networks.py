@@ -110,6 +110,7 @@ class HealpyGCNN(Sequential):
                     hp_nn.HealpyChebyshev,
                     hp_nn.HealpyMonomial,
                     hp_nn.Healpy_ResidualLayer,
+                    hp_nn.Healpy_ConvNeXtLayer,
                     hp_nn.Healpy_Transformer,
                     hp_nn.HealpyBernstein,
                 ),
@@ -128,7 +129,13 @@ class HealpyGCNN(Sequential):
                     actual_layer = layer._get_layer(current_A)
                 elif isinstance(
                     layer,
-                    (hp_nn.HealpyChebyshev, hp_nn.HealpyMonomial, hp_nn.HealpyBernstein, hp_nn.Healpy_ResidualLayer),
+                    (
+                        hp_nn.HealpyChebyshev,
+                        hp_nn.HealpyMonomial,
+                        hp_nn.HealpyBernstein,
+                        hp_nn.Healpy_ResidualLayer,
+                        hp_nn.Healpy_ConvNeXtLayer,
+                    ),
                 ):
                     if (max_batch_size is not None) and (current_Fin is not None):
                         n_matmul_splits = 1

@@ -376,6 +376,66 @@ class Healpy_ResidualLayer:
         )
 
 
+class Healpy_ConvNeXtLayer:
+    """Healpy wrapper for the ConvNeXt-style graph-conv block ``GCNN_ConvNeXtLayer``.
+
+    Mirrors ``Healpy_ResidualLayer``: it only stores the hyperparameters here and materializes the
+    actual layer in ``_get_layer`` once ``HealpyGCNN`` has computed the graph Laplacian. Like the
+    residual wrapper it is channel-preserving and deliberately exposes NO ``Fout`` attribute, so
+    ``HealpyGCNN`` / ``split_layers_at_nside`` keep the running channel count unchanged across it.
+    The block is Chebyshev-only (the depthwise spatial conv has no Monomial/Bernstein equivalent).
+    """
+
+    def __init__(
+        self,
+        K,
+        mlp_ratio=4.0,
+        layer_scale_init=1e-6,
+        drop_path_rate=0.0,
+        activation="gelu",
+        norm_kwargs=None,
+        use_bias=True,
+    ):
+        """
+        :param K: Chebyshev polynomial order of the depthwise spatial conv
+        :param mlp_ratio: hidden width of the pointwise MLP as a multiple of the channel count
+        :param layer_scale_init: LayerScale init; None disables LayerScale
+        :param drop_path_rate: stochastic-depth rate on the residual branch (0.0 = off)
+        :param activation: MLP activation, string or callable
+        :param norm_kwargs: kwargs for the LayerNormalization (axis defaults to -1)
+        :param use_bias: use a bias in the depthwise conv
+        """
+        self.K = K
+        self.mlp_ratio = mlp_ratio
+        self.layer_scale_init = layer_scale_init
+        self.drop_path_rate = drop_path_rate
+        self.activation = activation
+        self.norm_kwargs = norm_kwargs
+        self.use_bias = use_bias
+
+    def _get_layer(self, L, n_matmul_splits=1, spmm_backend="coo"):
+        """
+        initializes the actual layer, should be called once the graph Laplacian has been calculated
+        :param L: the graph laplacian
+        :param n_matmul_splits: Number of splits to apply to axis 1 of the dense tensor in the
+                                tf.sparse.sparse_dense_matmul operations to avoid the operation's size limitation
+        :param spmm_backend: sparse-matmul backend for L @ x ("coo"/"csr"/"gather"), see utils.make_spmm_operator
+        :return: GCNN_ConvNeXtLayer layer that can be called
+        """
+        return GCNN_ConvNeXtLayer(
+            L=L,
+            K=self.K,
+            mlp_ratio=self.mlp_ratio,
+            layer_scale_init=self.layer_scale_init,
+            drop_path_rate=self.drop_path_rate,
+            activation=self.activation,
+            norm_kwargs=self.norm_kwargs,
+            use_bias=self.use_bias,
+            n_matmul_splits=n_matmul_splits,
+            spmm_backend=spmm_backend,
+        )
+
+
 class Healpy_ViT(Graph_ViT):
     """
     This is a wrapper for the Graph_ViT to have everything consistent syntax between everything

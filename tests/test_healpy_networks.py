@@ -225,3 +225,34 @@ def test_HealpyGCNN_spmm_backend_equivalence(backend):
     # graph mode -- how training runs the network; exposes csr's captured-variant shape-inference bug
     other_graph = tf.function(lambda t: other(t))
     np.testing.assert_allclose(other_graph(m_in).numpy(), ref, rtol=1e-3, atol=1e-3)
+
+
+def test_HealpyGCNN_convnext_block():
+    # a Healpy_ConvNeXtLayer must be recognized by HealpyGCNN's isinstance whitelist and get its
+    # Laplacian injected via _get_layer (otherwise it falls through to the passthrough branch)
+    tf.keras.backend.clear_session()
+
+    nside_in = 64
+    n_pix = hp.nside2npix(nside_in)
+    np.random.seed(11)
+    m_in = np.random.normal(size=[3, n_pix, 1]).astype(np.float32)
+    indices = np.arange(n_pix)
+
+    layers = [
+        hp_nn.HealpyPseudoConv(p=1, Fout=8),
+        hp_nn.Healpy_ConvNeXtLayer(K=5, mlp_ratio=4.0, layer_scale_init=1e-6, drop_path_rate=0.1),
+        hp_nn.Healpy_ConvNeXtLayer(K=5),
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(4),
+    ]
+
+    tf.random.set_seed(11)
+    model = HealpyGCNN(nside=nside_in, indices=indices, layers=layers, max_batch_size=3)
+    model.build(input_shape=(3, n_pix, 1))
+
+    out = model(m_in)
+    assert out.shape == (3, 4)
+    # the block is channel-preserving: its depthwise kernel keeps the 8 channels from the pseudo-conv
+    convnext_built = [layer for layer in model.layers_use if type(layer).__name__ == "GCNN_ConvNeXtLayer"]
+    assert len(convnext_built) == 2
+    assert tuple(convnext_built[0].dwconv.kernel.shape) == (8, 5)

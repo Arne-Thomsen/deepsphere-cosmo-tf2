@@ -205,3 +205,69 @@ def test_spmm_backend_equivalence(layer_cls, backend):
     # CSRSparseMatrix-variant shape-inference bug (eager alone would pass right through it)
     other_graph = tf.function(lambda t: other(t))
     np.testing.assert_allclose(other_graph(x).numpy(), ref, rtol=2e-4, atol=2e-4)
+
+
+def test_Chebyshev_depthwise():
+    # depthwise conv: one spectral filter per channel, no channel mixing, so Fout must equal Fin
+    tf.random.set_seed(11)
+    L = tf.random.normal(shape=(3, 3), seed=11)
+    L = tf.matmul(L, tf.transpose(L))  # make symmetric
+    Fin, K = 7, 4
+    x = tf.random.normal(shape=(5, 3, Fin), seed=12)
+
+    cheb = gnn_layers.Chebyshev(L=L.numpy(), K=K, depth_wise=True, use_bias=True)
+    out = cheb(x)
+    # channel-preserving and the kernel is [Fin, K] (not [K*Fin, Fout])
+    assert out.shape == (5, 3, Fin)
+    assert tuple(cheb.kernel.shape) == (Fin, K)
+
+    # Fout is allowed only if it equals Fin; anything else must raise the depthwise assertion
+    gnn_layers.Chebyshev(L=L.numpy(), K=K, Fout=Fin, depth_wise=True)(x)
+    with pytest.raises(AssertionError):
+        gnn_layers.Chebyshev(L=L.numpy(), K=K, Fout=Fin + 1, depth_wise=True)(x)
+
+
+def test_DropPath():
+    tf.random.set_seed(11)
+    x = tf.random.normal(shape=(64, 3, 7), seed=12)
+
+    # rate 0 is the identity in both modes
+    dp0 = gnn_layers.DropPath(rate=0.0)
+    np.testing.assert_allclose(dp0(x, training=True).numpy(), x.numpy())
+    np.testing.assert_allclose(dp0(x, training=False).numpy(), x.numpy())
+
+    # rate > 0 is the identity at inference, and drops whole samples (rescaled) while training
+    dp = gnn_layers.DropPath(rate=0.5)
+    np.testing.assert_allclose(dp(x, training=False).numpy(), x.numpy())
+    out = dp(x, training=True).numpy()
+    # each sample is either fully zeroed or uniformly rescaled by 1/keep_prob
+    per_sample_zeroed = np.all(out == 0.0, axis=(1, 2))
+    assert per_sample_zeroed.any() and not per_sample_zeroed.all()
+    kept = out[~per_sample_zeroed]
+    np.testing.assert_allclose(kept, x.numpy()[~per_sample_zeroed] / 0.5, rtol=1e-5)
+
+    with pytest.raises(ValueError):
+        gnn_layers.DropPath(rate=1.0)
+
+
+def test_GCNN_ConvNeXtLayer():
+    tf.random.set_seed(11)
+    L = tf.random.normal(shape=(3, 3), seed=11)
+    L = tf.matmul(L, tf.transpose(L))  # make symmetric
+    C, K = 8, 5
+    x = tf.random.normal(shape=(5, 3, C), seed=12)
+
+    block = gnn_layers.GCNN_ConvNeXtLayer(L=L.numpy(), K=K, mlp_ratio=4.0, layer_scale_init=1e-6)
+    out = block(x)
+    # channel-preserving
+    assert out.shape == (5, 3, C)
+    # LayerScale gamma is per-channel and starts tiny -> the block is a near-identity at init
+    assert tuple(block.gamma.shape) == (C,)
+    np.testing.assert_allclose(out.numpy(), x.numpy(), atol=1e-3)
+    # the depthwise spatial conv has a [C, K] kernel (no C^2 channel-mixing weights)
+    assert tuple(block.dwconv.kernel.shape) == (C, K)
+
+    # layer_scale_init=None disables LayerScale (no gamma) and the block still runs channel-preserving
+    block_no_ls = gnn_layers.GCNN_ConvNeXtLayer(L=L.numpy(), K=K, layer_scale_init=None)
+    assert block_no_ls(x).shape == (5, 3, C)
+    assert block_no_ls.gamma is None
