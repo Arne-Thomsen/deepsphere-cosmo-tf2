@@ -365,7 +365,8 @@ class GCNN_ResidualLayer(Model):
     ):
         """
         Initializes the residual layer with the given argument
-        :param layer_type: The layer type, either "CHEBY" or "MONO" for chebychev or monomials
+        :param layer_type: The layer type, "CHEBY", "MONO" or "BERN" for Chebyshev, Monomial or
+                           Bernstein graph convolutions
         :param layer_kwargs: A dictionary with the inputs for the layer
         :param activation: activation function to use for the res layer
         :param act_before: use activation before skip connection
@@ -404,6 +405,9 @@ class GCNN_ResidualLayer(Model):
         elif self.layer_type == "MONO":
             self.layer1 = Monomial(**self.layer_kwargs)
             self.layer2 = Monomial(**self.layer_kwargs)
+        elif self.layer_type == "BERN":
+            self.layer1 = Bernstein(**self.layer_kwargs)
+            self.layer2 = Bernstein(**self.layer_kwargs)
         else:
             raise IOError(f"Layertype not understood: {self.layer_type}")
 
@@ -587,20 +591,23 @@ class Bernstein(Model):
         x0 = tf.transpose(input_tensor, perm=[1, 2, 0])  # M x Fin x N
         x0 = tf.reshape(x0, [M, -1])  # M x Fin*N
 
-        # list for stacking
+        # Build the K+1 Bernstein basis vectors b_i = comb(K,i)/2^K * (2I - L)^(K-i) * L^i * x0.
+        # The L-power ladder Lp[i] = L^i x0 is computed ONCE (K spmms) and shared across terms
+        # instead of recomputed per term; then P = (2I - L) is applied (K-i) times to Lp[i].
+        # This is FLOP-optimal for the Bernstein basis: K + K(K+1)/2 spmms (20 at K=5) vs the
+        # previous double loop's K(K+1) (30 at K=5). Each _L_op call still processes exactly Fin*N
+        # columns, so the cuSPARSE nnz*cols kernel limit behaves as before.
+        Lp = [x0]
+        for _ in range(self.K):
+            Lp.append(self._L_op(Lp[-1]))  # Lp[i] = L^i x0
+
         stack = []
         for i in range(0, self.K + 1):
-            x1 = x0
             theta = comb(self.K, i) / (2**self.K)
-            for j in range(i):
-                x2 = self._L_op(x1)
-                x1 = x2
-            x2 = x1
-            for k in range(self.K - i):
-                x3 = 2 * x2 - self._L_op(x2)
-                x2 = x3
-            x3 = theta * x3
-            stack.append(x3)
+            v = Lp[i]
+            for _ in range(self.K - i):
+                v = 2 * v - self._L_op(v)  # apply P = 2I - L
+            stack.append(theta * v)
         x = tf.stack(stack, axis=0)
         x = tf.reshape(x, [(self.K + 1), M, Fin, -1])  # K+1 x M x Fin x N
         x = tf.transpose(x, perm=[3, 1, 2, 0])  # N x M x Fin x K+1

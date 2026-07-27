@@ -86,6 +86,50 @@ def test_Bernstein():
     new = bern(x)
 
 
+def test_Bernstein_basis_algebra():
+    """Pin the Bernstein basis math independently of the layer's evaluation loop. The layer builds
+    b_i = comb(K,i)/2^K * (2I - L~)^(K-i) * L~^i * x via a cached L-power ladder; here we form each
+    operator explicitly with np.linalg.matrix_power (a different computation path) and check the full
+    layer output matches. Guards the O(K) rewrite against any change to the basis it produces."""
+    from scipy.special import comb
+
+    # run in float64 so this is a true algebra check (float32 would accumulate ~1e-3 over K powers,
+    # masking real errors); the float32 backends are already covered by test_spmm_backend_equivalence.
+    prev_policy = tf.keras.mixed_precision.global_policy()
+    tf.keras.mixed_precision.set_global_policy("float64")
+    try:
+        tf.random.set_seed(11)
+        L = tf.random.normal(shape=(6, 6), seed=11, dtype=tf.float64)
+        L = tf.matmul(L, tf.transpose(L))  # symmetric
+        x = tf.random.normal(shape=(4, 6, 3), seed=12, dtype=tf.float64)  # (N, M, Fin)
+        N, M, Fin = 4, 6, 3
+        Fout, K = 5, 4
+
+        initializer = tf.initializers.RandomNormal(stddev=0.1, seed=13)
+        bern = gnn_layers.Bernstein(L=L.numpy(), Fout=Fout, K=K, initializer=initializer)
+        out = bern(x).numpy()  # triggers build
+
+        # the exact rescaled Laplacian the layer used (avoids re-deriving rescale_L / lmax)
+        Ltilde = tf.sparse.to_dense(bern.sparse_L).numpy()  # (M, M)
+        kernel = bern.kernel.numpy()  # ((K+1)*Fin, Fout)
+        P = 2.0 * np.eye(M) - Ltilde
+
+        # x0 in the layer's node-major layout: (M, Fin*N)
+        x0 = np.transpose(x.numpy(), (1, 2, 0)).reshape(M, Fin * N)
+
+        basis = []
+        for i in range(K + 1):
+            op = comb(K, i) / (2**K) * (np.linalg.matrix_power(P, K - i) @ np.linalg.matrix_power(Ltilde, i))
+            basis.append(op @ x0)  # (M, Fin*N)
+        b = np.stack(basis, axis=0)  # (K+1, M, Fin*N)
+        b = b.reshape(K + 1, M, Fin, N).transpose(3, 1, 2, 0).reshape(-1, Fin * (K + 1))  # (N*M, Fin*(K+1))
+        ref = (b @ kernel).reshape(N, M, Fout)
+
+        np.testing.assert_allclose(out, ref, rtol=1e-8, atol=1e-8)
+    finally:
+        tf.keras.mixed_precision.set_global_policy(prev_policy)
+
+
 def test_GCNN_ResidualLayer():
     # we get a random map to pool
     n_pix = hp.nside2npix(4)
