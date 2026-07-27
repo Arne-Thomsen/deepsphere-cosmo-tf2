@@ -1,3 +1,5 @@
+import warnings
+
 import pytest
 import numpy as np
 import tensorflow as tf
@@ -248,6 +250,77 @@ def test_DropPath():
 
     with pytest.raises(ValueError):
         gnn_layers.DropPath(rate=1.0)
+
+
+def test_GCNN_ResidualLayer_drop_path():
+    # stochastic depth is NOT a ConvNeXt-only feature: DropPath is a per-sample Bernoulli mask with no
+    # trainable variables, so it applies to the classic two-conv residual block just as well. This is the
+    # form y3-deep-lss uses (activation=None -> the pure `x + branch` skip), where the mask is EXACT:
+    # a dropped sample must come out of the block bit-identical to its input.
+    tf.random.set_seed(11)
+    L = tf.random.normal(shape=(3, 3), seed=11)
+    L = tf.matmul(L, tf.transpose(L))  # make symmetric
+    # rescale to unit spectral radius. The sibling tests leave L unnormalized, which is harmless for a
+    # SINGLE conv but not here: this block chains TWO Chebyshev convs, and on an L with eigenvalues ~10
+    # the K=4 recursion amplifies to ~1e4 before cancellation, leaving ~1e-3 of float32 noise between two
+    # separately-built instances. Normalizing keeps the comparison below sharp instead of forcing a
+    # tolerance so loose it could no longer see the effect under test.
+    L = L / tf.reduce_max(tf.abs(tf.linalg.eigvalsh(L)))
+    C, K = 8, 4
+    x = tf.random.normal(shape=(64, 3, C), seed=12)
+    layer_kwargs = {"L": L.numpy(), "K": K, "use_bias": True}
+
+    # rate 0 must reproduce the un-dropped block exactly, in both modes
+    block0 = gnn_layers.GCNN_ResidualLayer("CHEBY", dict(layer_kwargs), drop_path_rate=0.0)
+    ref = block0(x, training=True).numpy()
+    np.testing.assert_allclose(block0(x, training=False).numpy(), ref, rtol=1e-6, atol=1e-6)
+
+    block = gnn_layers.GCNN_ResidualLayer("CHEBY", dict(layer_kwargs), drop_path_rate=0.5)
+    block(x)  # build
+    block.set_weights(block0.get_weights())  # identical weights -> any difference is DropPath alone
+    # assert the copy landed, EXACTLY, so the output comparisons below cannot be excused by a bad copy
+    # (they run at a float tolerance; this one does not need to)
+    for w_new, w_ref in zip(block.get_weights(), block0.get_weights()):
+        assert np.array_equal(w_new, w_ref), "set_weights did not reproduce the rate-0 block's weights"
+
+    # at inference DropPath is the identity, so the block matches the rate-0 block. This is the one
+    # CROSS-instance comparison and it carries a float tolerance: two separately-built layers do not agree
+    # bitwise (the repo's spmm-backend test allows 2e-4 for a single conv; this block chains two, and the
+    # measured spread is ~7e-4 on a handful of elements). 5e-3 still sits ~100x below the ~2x/0x deviation
+    # a broken inference path would produce, so the assertion keeps its teeth.
+    out_inf = block(x, training=False).numpy()
+    np.testing.assert_allclose(out_inf, ref, rtol=5e-3, atol=5e-3)
+
+    # everything below compares the SAME instance against itself, so it is not exposed to that spread.
+    # While training, a dropped sample falls back to the identity path -- and this one is asserted
+    # EXACTLY, because no arithmetic happens on it: the branch is multiplied by a hard zero and what
+    # comes out is the input tensor itself. This is the test's real content.
+    out = block(x, training=True).numpy()
+    dropped = np.all(out == x.numpy(), axis=(1, 2))
+    assert dropped.any() and not dropped.all(), "expected some but not all samples to drop the branch"
+    # and a kept sample is the identity plus the branch rescaled by 1/keep_prob
+    kept_branch = (out[~dropped] - x.numpy()[~dropped]) / 2.0
+    np.testing.assert_allclose(kept_branch, (out_inf - x.numpy())[~dropped], rtol=5e-3, atol=5e-3)
+
+
+def test_GCNN_ResidualLayer_drop_path_post_activation_warns():
+    # with a post-activation skip the branch is masked INSIDE the activation, so a dropped path gives
+    # activation(alpha*input) rather than the identity -- approximate, and it must say so out loud.
+    L = tf.random.normal(shape=(3, 3), seed=11)
+    L = tf.matmul(L, tf.transpose(L))
+    layer_kwargs = {"L": L.numpy(), "K": 4, "use_bias": True}
+
+    with pytest.warns(RuntimeWarning, match="approximate"):
+        gnn_layers.GCNN_ResidualLayer("CHEBY", dict(layer_kwargs), activation="relu", drop_path_rate=0.1)
+
+    # the exact forms must NOT warn: activation=None, act_before=True, and rate 0 with any activation
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        gnn_layers.GCNN_ResidualLayer("CHEBY", dict(layer_kwargs), drop_path_rate=0.1)
+        gnn_layers.GCNN_ResidualLayer(
+            "CHEBY", dict(layer_kwargs), activation="relu", act_before=True, drop_path_rate=0.1
+        )
+        gnn_layers.GCNN_ResidualLayer("CHEBY", dict(layer_kwargs), activation="relu", drop_path_rate=0.0)
 
 
 def test_GCNN_ConvNeXtLayer():

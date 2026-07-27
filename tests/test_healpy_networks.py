@@ -227,6 +227,43 @@ def test_HealpyGCNN_spmm_backend_equivalence(backend):
     np.testing.assert_allclose(other_graph(m_in).numpy(), ref, rtol=1e-3, atol=1e-3)
 
 
+def test_HealpyGCNN_residual_drop_path():
+    # the drop_path_rate kwarg must survive the Healpy_ResidualLayer -> _get_layer -> GCNN_ResidualLayer
+    # handoff, i.e. reach the block that HealpyGCNN actually builds rather than being dropped in the
+    # wrapper. Same path the ConvNeXt block already exercises, for the CLASSIC residual block.
+    tf.keras.backend.clear_session()
+
+    nside_in = 64
+    n_pix = hp.nside2npix(nside_in)
+    np.random.seed(11)
+    m_in = np.random.normal(size=[3, n_pix, 1]).astype(np.float32)
+    indices = np.arange(n_pix)
+
+    layers = [
+        hp_nn.HealpyPseudoConv(p=1, Fout=8),
+        hp_nn.Healpy_ResidualLayer(
+            "CHEBY",
+            layer_kwargs={"K": 5, "use_bias": True},
+            use_bn=True,
+            norm_type="layer_norm",
+            drop_path_rate=0.1,
+        ),
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(4),
+    ]
+
+    tf.random.set_seed(11)
+    model = HealpyGCNN(nside=nside_in, indices=indices, layers=layers, max_batch_size=3)
+    model.build(input_shape=(3, n_pix, 1))
+
+    assert model(m_in).shape == (3, 4)
+    built = [layer for layer in model.layers_use if type(layer).__name__ == "GCNN_ResidualLayer"]
+    assert len(built) == 1
+    assert built[0].drop_path.rate == 0.1
+    # and at inference the block is unaffected by it
+    assert model(m_in, training=False).shape == (3, 4)
+
+
 def test_HealpyGCNN_convnext_block():
     # a Healpy_ConvNeXtLayer must be recognized by HealpyGCNN's isinstance whitelist and get its
     # Laplacian injected via _get_layer (otherwise it falls through to the passthrough branch)

@@ -326,10 +326,12 @@ class Healpy_ResidualLayer:
         norm_type="batch_norm",
         bn_kwargs=None,
         alpha=1.0,
+        drop_path_rate=0.0,
     ):
         """
         Initializes the residual layer with the given argument
-        :param layer_type: The layer type, either "CHEBY" or "MONO" for chebychev or monomials
+        :param layer_type: The layer type, "CHEBY", "MONO" or "BERN" for Chebyshev, Monomial or
+                           Bernstein graph convolutions
         :param layer_kwargs: A dictionary with the inputs for the layer
         :param activation: activation function to use for the res layer
         :param act_before: use activation before skip connection
@@ -338,6 +340,8 @@ class Healpy_ResidualLayer:
                           tf.keras.layers.LayerNormalization or moving_norm for special_layer.MovingBatchNorm
         :param bn_kwargs: An optional dictionary containing further keyword arguments for the normalization layer
         :param alpha: Coupling strength of the input -> layer(input) + alpha*input
+        :param drop_path_rate: stochastic-depth rate on the residual branch (0.0 = off), see
+                               GCNN_ResidualLayer for the exactness caveat on post-activation skips
         """
 
         # we only save the variables here
@@ -349,6 +353,7 @@ class Healpy_ResidualLayer:
         self.norm_type = norm_type
         self.bn_kwargs = bn_kwargs
         self.alpha = alpha
+        self.drop_path_rate = drop_path_rate
 
     def _get_layer(self, L, n_matmul_splits=1, spmm_backend="coo"):
         """
@@ -373,6 +378,7 @@ class Healpy_ResidualLayer:
             norm_type=self.norm_type,
             bn_kwargs=self.bn_kwargs,
             alpha=self.alpha,
+            drop_path_rate=self.drop_path_rate,
         )
 
 

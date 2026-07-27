@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import eigsh
@@ -364,6 +366,7 @@ class GCNN_ResidualLayer(Model):
         norm_type="batch_norm",
         bn_kwargs=None,
         alpha=1.0,
+        drop_path_rate=0.0,
     ):
         """
         Initializes the residual layer with the given argument
@@ -377,6 +380,18 @@ class GCNN_ResidualLayer(Model):
                           tf.keras.layers.LayerNormalization
         :param bn_kwargs: An optional dictionary containing further keyword arguments for the normalization layer
         :param alpha: Coupling strength of the input -> layer(input) + alpha*input
+        :param drop_path_rate: stochastic-depth rate on the residual branch (0.0 = off). Same DropPath
+                               layer as GCNN_ConvNeXtLayer -- it is a per-sample Bernoulli mask with no
+                               trainable variables, so nothing about it is specific to that block and
+                               turning it on here does NOT change the checkpoint lineage.
+                               NOTE the mask is EXACT only when the branch is added outside the
+                               activation: for activation=None (the pure `x + branch` form, which is what
+                               the y3-deep-lss resnet body uses) and for act_before=True with an
+                               activation satisfying f(0)=0 (relu/gelu/tanh). In the post-activation form
+                               `act(branch + alpha*in)` a dropped branch yields `act(alpha*in)` rather
+                               than the identity, so stochastic depth is approximate there; a warning is
+                               raised rather than an error, since the approximation is mild for a
+                               near-linear activation.
         """
         # This is necessary for every Layer
         super(GCNN_ResidualLayer, self).__init__()
@@ -425,6 +440,16 @@ class GCNN_ResidualLayer(Model):
 
         self.alpha = alpha
 
+        self.drop_path = DropPath(drop_path_rate)
+        if drop_path_rate > 0.0 and self.activation is not None and not self.act_before:
+            warnings.warn(
+                "GCNN_ResidualLayer: drop_path_rate > 0 with a post-activation skip "
+                "(activation set and act_before=False). The branch is masked inside the activation, so a "
+                "dropped path gives activation(alpha*input) rather than the identity -- stochastic depth "
+                "is approximate here. Use activation=None or act_before=True for the exact form.",
+                RuntimeWarning,
+            )
+
     def call(self, input_tensor, training=False):
         """
         Calls the layer on an input tensorf
@@ -444,6 +469,9 @@ class GCNN_ResidualLayer(Model):
         # bn
         if self.use_bn:
             x = self.bn2(x, training=training)
+
+        # stochastic depth on the residual BRANCH only (identity path is never dropped)
+        x = self.drop_path(x, training=training)
 
         # deal with the activation
         if self.activation is None:
