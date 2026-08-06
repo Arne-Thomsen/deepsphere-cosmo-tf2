@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import math
 from tensorflow.keras.models import Sequential
 import healpy as hp
 from pygsp.graphs import SphereHealpix
@@ -8,7 +7,6 @@ from pygsp import filters
 
 from . import healpy_layers as hp_nn
 from . import gnn_layers as gnn
-from . import utils
 from . import plot
 
 

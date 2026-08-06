@@ -132,23 +132,30 @@ def main():
     ap.add_argument("--K", type=int, default=5, help="Chebyshev polynomial order (poly_degree)")
     ap.add_argument("--n_warmup", type=int, default=5)
     ap.add_argument("--n_iter", type=int, default=50)
-    ap.add_argument("--fsky", type=float, default=0.10,
-                    help="masked footprint sky fraction (training uses a mask; DES Y3 ~= 0.10). "
-                         "Set 1.0 for the full sphere.")
+    ap.add_argument(
+        "--fsky",
+        type=float,
+        default=0.10,
+        help="masked footprint sky fraction (training uses a mask; DES Y3 ~= 0.10). " "Set 1.0 for the full sphere.",
+    )
     ap.add_argument("--out", type=str, default=None, help="optional CSV path (stage on /iopsstor)")
     args = ap.parse_args()
 
     gpus = tf.config.list_physical_devices("GPU")
     print(f"# TF {tf.__version__} | GPUs: {[g.name for g in gpus] or 'NONE (CPU-only)'}")
-    print(f"# k={args.k} batch={args.batch} fin={args.fin} K={args.K} "
-          f"warmup={args.n_warmup} iter={args.n_iter}", flush=True)
+    print(
+        f"# k={args.k} batch={args.batch} fin={args.fin} K={args.K} " f"warmup={args.n_warmup} iter={args.n_iter}",
+        flush=True,
+    )
 
     # (label, backend, mode). coo-graph is the reference. csr is tested eager AND graph on purpose.
-    plan = [("coo", "coo", "graph"),
-            ("csr-eager", "csr", "eager"),
-            ("csr-graph", "csr", "graph"),
-            ("gather-graph", "gather", "graph"),
-            ("gather-xla", "gather", "xla")]
+    plan = [
+        ("coo", "coo", "graph"),
+        ("csr-eager", "csr", "eager"),
+        ("csr-graph", "csr", "graph"),
+        ("gather-graph", "gather", "graph"),
+        ("gather-xla", "gather", "xla"),
+    ]
 
     header = f"{'nside':>6} {'npix':>10} {'nnz':>12} {'backend':>13} {'ms/apply':>10} {'maxdiff_vs_coo':>16}"
     rows = []
@@ -162,9 +169,11 @@ def main():
         n_splits = production_n_splits(W, L.nnz)
         gather_elems = npix * D * W  # size of the (N, D, W) tensor the gather backend materialises
         x0 = tf.constant(np.random.default_rng(0).standard_normal((npix, W)).astype(np.float32))
-        print(f"\n# nside={nside} fsky={args.fsky} npix={npix} nnz={L.nnz} maxdeg(D)={D} W(fin*batch)={W} "
-              f"coo_n_splits={n_splits} gather(N*D*W)={gather_elems:.3e} "
-              f"({gather_elems / INT32_LIMIT:.1f}x 2^31)")
+        print(
+            f"\n# nside={nside} fsky={args.fsky} npix={npix} nnz={L.nnz} maxdeg(D)={D} W(fin*batch)={W} "
+            f"coo_n_splits={n_splits} gather(N*D*W)={gather_elems:.3e} "
+            f"({gather_elems / INT32_LIMIT:.1f}x 2^31)"
+        )
         print(header)
         print("-" * len(header), flush=True)
 
@@ -173,8 +182,11 @@ def main():
             # Guard the gather backend: an (N,D,W) beyond 2**31 overflows int32 indexing in the
             # elementwise multiply and faults the whole CUDA context, so skip cleanly instead.
             if backend == "gather" and gather_elems > INT32_LIMIT:
-                print(f"{nside:>6} {npix:>10} {L.nnz:>12} {label:>13} {'SKIPPED':>10}   "
-                      f"N*D*W={gather_elems:.3e} > 2^31 (needs RHS chunking)", flush=True)
+                print(
+                    f"{nside:>6} {npix:>10} {L.nnz:>12} {label:>13} {'SKIPPED':>10}   "
+                    f"N*D*W={gather_elems:.3e} > 2^31 (needs RHS chunking)",
+                    flush=True,
+                )
                 rows.append((nside, npix, L.nnz, label, float("nan"), float("nan")))
                 continue
             try:
@@ -183,8 +195,10 @@ def main():
                 ms, out = time_runner(run, x0, args.n_warmup, args.n_iter)
             except Exception as exc:
                 msg = str(exc).splitlines()[0][:90]
-                print(f"{nside:>6} {npix:>10} {L.nnz:>12} {label:>13} {'FAILED':>10}   "
-                      f"{type(exc).__name__}: {msg}", flush=True)
+                print(
+                    f"{nside:>6} {npix:>10} {L.nnz:>12} {label:>13} {'FAILED':>10}   " f"{type(exc).__name__}: {msg}",
+                    flush=True,
+                )
                 rows.append((nside, npix, L.nnz, label, float("nan"), float("nan")))
                 continue
             if label == "coo":

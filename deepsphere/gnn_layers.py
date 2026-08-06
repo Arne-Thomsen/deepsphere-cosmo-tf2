@@ -57,9 +57,7 @@ class Chebyshev(Model):
         self.use_bias = use_bias
         self.use_bn = use_bn
         if self.use_bn:
-            self.bn = tf.keras.layers.BatchNormalization(
-                axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False
-            )
+            self.bn = tf.keras.layers.BatchNormalization(axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False)
         self.initializer = initializer
         if activation is None or callable(activation):
             self.activation = activation
@@ -234,9 +232,7 @@ class Monomial(Model):
         self.use_bias = use_bias
         self.use_bn = use_bn
         if self.use_bn:
-            self.bn = tf.keras.layers.BatchNormalization(
-                axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False
-            )
+            self.bn = tf.keras.layers.BatchNormalization(axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False)
         self.initializer = initializer
         if activation is None or callable(activation):
             self.activation = activation
@@ -665,9 +661,7 @@ class Bernstein(Model):
         self.use_bias = use_bias
         self.use_bn = use_bn
         if self.use_bn:
-            self.bn = tf.keras.layers.BatchNormalization(
-                axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False
-            )
+            self.bn = tf.keras.layers.BatchNormalization(axis=-1, momentum=0.9, epsilon=1e-5, center=False, scale=False)
         self.initializer = initializer
         if activation is None or callable(activation):
             self.activation = activation

@@ -78,15 +78,11 @@ def plot_filters_section(
     ylabel="in map {}",
     title="Sections of the {} filters in the filterbank",
     figsize=None,
-    **kwargs
+    **kwargs,
 ):
     """Plot the sections of all filters in a filterbank."""
 
     nside = hp.npix2nside(filters.G.N)
-    npix = hp.nside2npix(nside)
-
-    # Create an inverse mapping from nest to ring.
-    index = hp.reorder(range(npix), n2r=True)
 
     # Get the index of the equator.
     index_equator, ind = get_index_equator(nside, order)
@@ -108,7 +104,7 @@ def plot_filters_section(
     angle -= abs(angle[-1] + angle[0]) / 2
     angle = angle / (2 * np.pi) * 360
 
-    if figsize == None:
+    if figsize is None:
         figsize = (12, 12 / ncols * nrows)
 
     # Plot everything.

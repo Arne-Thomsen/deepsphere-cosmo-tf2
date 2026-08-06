@@ -1,12 +1,14 @@
-from .gnn_layers import *
-from .gnn_transformers import *
-
 import os
+import numpy as np
 import healpy as hp
+import tensorflow as tf
 from sklearn.neighbors import BallTree
+from tensorflow.keras import Model
 from typing import Union, Optional
 from tqdm import tqdm
 from . import utils
+from .gnn_layers import Bernstein, Chebyshev, GCNN_ConvNeXtLayer, GCNN_ResidualLayer, Monomial
+from .gnn_transformers import Graph_Transformer, Graph_ViT
 
 
 class HealpyPool(Model):
@@ -64,7 +66,7 @@ class HealpyPool(Model):
 
         n_nodes = int(input_shape[1])
         if n_nodes % self.filter_size != 0:
-            raise IOError("Input shape {input_shape} not compatible with the filter size {self.filter_size}")
+            raise IOError(f"Input shape {input_shape} not compatible with the filter size {self.filter_size}")
 
     def call(self, input_tensor):
         """
@@ -449,9 +451,7 @@ class Healpy_ViT(Graph_ViT):
     at runtime, it is literally the same as Graph_ViT
     """
 
-    def __init__(
-        self, p, key_dim, num_heads, positional_encoding=True, n_layers=1, activation="relu", layer_norm=True
-    ):
+    def __init__(self, p, key_dim, num_heads, positional_encoding=True, n_layers=1, activation="relu", layer_norm=True):
         """
         Creates a visual transformer according to:
         https://arxiv.org/pdf/2010.11929.pdf
@@ -653,11 +653,9 @@ class HealpySmoothing(Model):
         self.mask = mask
 
         # smoothing
-        assert fwhm is not None or sigma is not None, f"One of fwhm and sigma has to be specified"
-        assert fwhm is None or sigma is None, f"Only one of fwhm and sigma can be specified"
-        assert fwhm_base is None or isinstance(
-            fwhm, (list, np.ndarray)
-        ), f"fwhm_base requires a per channel fwhm list"
+        assert fwhm is not None or sigma is not None, "One of fwhm and sigma has to be specified"
+        assert fwhm is None or sigma is None, "Only one of fwhm and sigma can be specified"
+        assert fwhm_base is None or isinstance(fwhm, (list, np.ndarray)), "fwhm_base requires a per channel fwhm list"
 
         self.fwhm = fwhm
         self.fwhm_base = fwhm_base
@@ -673,14 +671,14 @@ class HealpySmoothing(Model):
 
         if self.fwhm == 0.0 or self.sigma == 0.0:
             self.do_smoothing = False
-            print(f"The layer implements the identity, smoothing is disabled")
+            print("The layer implements the identity, smoothing is disabled")
         else:
             self.do_smoothing = True
 
             if isinstance(self.fwhm, (list, np.ndarray)):
                 assert (
                     self.per_channel_repetitions is None
-                ), f"per_channel_repetitions can't be specified when fwhm is a list, since it is then inferred"
+                ), "per_channel_repetitions can't be specified when fwhm is a list, since it is then inferred"
 
                 self.fwhm = np.array(self.fwhm)
 
@@ -702,7 +700,7 @@ class HealpySmoothing(Model):
             elif isinstance(self.sigma, (list, np.ndarray)):
                 assert (
                     self.per_channel_repetitions is None
-                ), f"per_channel_repetitions can't be specified when sigma is a list, since it is then inferred"
+                ), "per_channel_repetitions can't be specified when sigma is a list, since it is then inferred"
 
                 self.sigma = np.array(self.sigma)
                 sigma_min = np.min(self.sigma)
@@ -736,7 +734,7 @@ class HealpySmoothing(Model):
                     per_channel_factor = np.sqrt(self.per_channel_repetitions)
                     print(f"Using the per channel smoothing repetitions {self.per_channel_repetitions}")
                     print(
-                        f"Using the per channel smoothing scales "
+                        "Using the per channel smoothing scales "
                         f"sigma = {per_channel_factor * self.sigma_arcmin} arcmin, "
                         f"fwhm = {per_channel_factor * self.fwhm_arcmin} arcmin"
                     )
@@ -759,7 +757,7 @@ class HealpySmoothing(Model):
                     self._build_kernel()
 
             self._build_sparse_tensor()
-            print(f"Successfully created the sparse kernel tensor")
+            print("Successfully created the sparse kernel tensor")
 
         # white noise
         if self.white_noise_sigma is not None:
@@ -768,8 +766,8 @@ class HealpySmoothing(Model):
 
             if mask is None:
                 print(
-                    f"Warning, you're adding white noise to the maps but haven't provided a mask! The noise will "
-                    f"extend to the padding"
+                    "Warning, you're adding white noise to the maps but haven't provided a mask! The noise will "
+                    "extend to the padding"
                 )
         else:
             self.white_noise_layer = None
@@ -790,8 +788,8 @@ class HealpySmoothing(Model):
             else:
                 self.n_batch = None
                 print(
-                    f"Since the batch size cannot be inferred from the input shape and max_batch_size is not "
-                    f"available, no sparse-dense matmul splits are performed, which may cause an error."
+                    "Since the batch size cannot be inferred from the input shape and max_batch_size is not "
+                    "available, no sparse-dense matmul splits are performed, which may cause an error."
                 )
 
             # map dimensions
@@ -805,7 +803,7 @@ class HealpySmoothing(Model):
 
                 assert (
                     self.per_channel_repetitions.dtype == int
-                ), f"The list per_channel_repetitions has to contain integers only"
+                ), "The list per_channel_repetitions has to contain integers only"
 
             if self.mask is not None:
                 self.mask = tf.cast(self.mask, dtype=self.layer_compute_dtype)
@@ -817,7 +815,7 @@ class HealpySmoothing(Model):
 
                 assert (
                     self.mask.shape[1] == self.n_indices
-                ), f"The mask has to have shape (1, n_indices, 1) or (1, n_indices, n_channels)"
+                ), "The mask has to have shape (1, n_indices, 1) or (1, n_indices, n_channels)"
 
             self.n_matmul_splits = 1
             # check if we need to split the matmul
@@ -832,14 +830,12 @@ class HealpySmoothing(Model):
                     self.n_matmul_splits += 1
 
             # precompute the kernel-application operator once for the chosen sparse-matmul backend
-            self._smooth_op = utils.make_spmm_operator(
-                self.sparse_kernel, self.spmm_backend, self.n_matmul_splits
-            )
+            self._smooth_op = utils.make_spmm_operator(self.sparse_kernel, self.spmm_backend, self.n_matmul_splits)
 
             if self.white_noise_layer is not None:
                 self.white_noise_layer.build(input_shape)
 
-            print(f"Successfully built the smoothing layer")
+            print("Successfully built the smoothing layer")
 
     def call(self, inputs: tf.Tensor) -> tf.Tensor:
         """

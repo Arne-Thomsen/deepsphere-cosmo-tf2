@@ -131,15 +131,16 @@ def main():
     n_ch = len(FWHM[args.probe]["fwhm"])
     rng = np.random.default_rng(0)
     x = tf.constant(rng.standard_normal((args.batch, len(indices), n_ch)).astype(np.float32))
-    print(f"# probe={args.probe} nside={args.nside} n_pix(footprint)={len(indices)} "
-          f"(f_sky~{len(indices)/hp.nside2npix(args.nside):.3f}) channels={n_ch} batch={args.batch}")
+    print(
+        f"# probe={args.probe} nside={args.nside} n_pix(footprint)={len(indices)} "
+        f"(f_sky~{len(indices)/hp.nside2npix(args.nside):.3f}) channels={n_ch} batch={args.batch}"
+    )
     print(f"# warmup={args.n_warmup} iter={args.n_iter}\n")
 
     # (backend, jit) pairs. coo/csr are graph-mode (their sparse ops are not XLA-compatible);
     # gather is run both graph-mode and jit-compiled. coo+xla / csr+xla are attempted only to show
     # they fail -- that failure is exactly why smoothing is eager today.
-    plan = [("coo", False), ("csr", False), ("gather", False), ("gather", True),
-            ("coo", True), ("csr", True)]
+    plan = [("coo", False), ("csr", False), ("gather", False), ("gather", True), ("coo", True), ("csr", True)]
 
     header = f"{'backend':>12} {'ms/call':>10} {'peak_MB':>10} {'maxdiff_vs_coo':>16}"
     print(header)

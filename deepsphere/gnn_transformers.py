@@ -257,9 +257,7 @@ class Graph_ViT(Model):
     repeated multiple times.
     """
 
-    def __init__(
-        self, p, key_dim, num_heads, positional_encoding=True, n_layers=1, activation="relu", layer_norm=True
-    ):
+    def __init__(self, p, key_dim, num_heads, positional_encoding=True, n_layers=1, activation="relu", layer_norm=True):
         """
         Creates a visual transformer according to:
         https://arxiv.org/pdf/2010.11929.pdf
@@ -371,9 +369,7 @@ class Graph_Transformer(Model):
     as a mask in the softmax without any edge features.
     """
 
-    def __init__(
-        self, A, key_dim, num_heads, positional_encoding=True, n_layers=1, activation="relu", layer_norm=True
-    ):
+    def __init__(self, A, key_dim, num_heads, positional_encoding=True, n_layers=1, activation="relu", layer_norm=True):
         """
         :param A: The adjacency matrix of the graph
         :param key_dim: Dimension of the key, query and value for the embedding in the multi head attention for each

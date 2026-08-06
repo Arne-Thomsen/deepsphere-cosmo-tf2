@@ -40,9 +40,9 @@ def extend_indices(indices, nside_in, nside_out, nest=True):
 def rescale_L(L, lmax=2, scale=1):
     """Rescale the Laplacian eigenvalues in [-scale,scale]."""
     M, M = L.shape
-    I = sparse.identity(M, format="csr", dtype=L.dtype)
+    identity = sparse.identity(M, format="csr", dtype=L.dtype)
     L *= 2 * scale / lmax
-    L -= I
+    L -= identity
     return L
 
 
